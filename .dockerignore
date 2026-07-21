@@ -1,0 +1,11 @@
+node_modules
+npm-debug.log
+koyeb-bin
+*.exe
+.workbuddy
+data
+*.db
+*.db-wal
+*.db-shm
+cloudflared*
+koyeb-cli*
