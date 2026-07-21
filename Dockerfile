@@ -5,7 +5,8 @@ FROM node:22-alpine
 WORKDIR /app
 
 # 先装依赖（利用 Docker 缓存，仅在 package.json 变动时才重装）
-COPY package*.json ./
+# 复制 .npmrc 使用国内镜像源，避免 Docker 构建时 npm install 超时
+COPY package*.json .npmrc ./
 RUN npm install --omit=dev
 
 # 拷贝全部源码
