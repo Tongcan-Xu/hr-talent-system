@@ -1,13 +1,16 @@
 {
   "name": "hr-talent-system",
   "version": "1.0.0",
-  "description": "人力资源人才管理系统 - 招聘流程/入职办理/人才库/数据看板（零依赖）",
+  "description": "人力资源人才管理系统 - 招聘流程/入职办理/人才库/数据看板（支持 SQLite / Postgres 双数据库）",
   "main": "server.js",
   "scripts": {
     "start": "node server.js"
   },
   "engines": {
     "node": ">=22.5.0"
+  },
+  "dependencies": {
+    "pg": "^8.12.0"
   },
   "private": true
 }
