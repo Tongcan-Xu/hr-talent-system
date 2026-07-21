@@ -5,7 +5,7 @@
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
-    "build": "node -e \"console.log('build skipped — 纯 Node 服务，无需编译')\""
+    "build": "echo 'no build step needed for this Node service'"
   },
   "engines": {
     "node": ">=18.0.0"

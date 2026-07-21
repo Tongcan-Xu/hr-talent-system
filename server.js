@@ -269,6 +269,11 @@ const server = http.createServer(async (req, res) => {
     const pathname = url.pathname;
     const q = url.searchParams;
 
+    // 健康检查（不依赖数据库，供平台存活探测，务必 200）
+    if (pathname === '/api/health' && req.method === 'GET') {
+      return sendJSON(res, 200, { ok: true, db: usePg ? 'postgres' : 'sqlite', time: now() });
+    }
+
     // Static files
     if (req.method === 'GET' && !pathname.startsWith('/api/')) {
       return serveStatic(pathname, res);
@@ -586,16 +591,18 @@ function serveStatic(pathname, res) {
 
 // ---------- 启动 ----------
 (async () => {
+  // 数据库初始化失败不再致命退出：服务照常启动，数据库连通前接口会返回友好错误，
+  // 避免平台因启动时连不上库而判定“部署失败/反复重启”。
   try {
     await initSchema();
     await seedAdmin();
-    server.listen(PORT, HOST, () => {
-      console.log(`HR Talent System running at http://${HOST}:${PORT} [${usePg ? 'Postgres' : 'SQLite'}]`);
-    });
+    console.log('数据库初始化成功');
   } catch (e) {
-    console.error('启动失败:', e);
-    process.exit(1);
+    console.error('数据库初始化警告（服务仍会启动，请检查 DATABASE_URL 与网络）:', e.message);
   }
+  server.listen(PORT, HOST, () => {
+    console.log(`HR Talent System running at http://${HOST}:${PORT} [${usePg ? 'Postgres' : 'SQLite'}]`);
+  });
 })();
 
 module.exports = server;
