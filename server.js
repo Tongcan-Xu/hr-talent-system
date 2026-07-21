@@ -11,14 +11,14 @@ const DATA_DIR = process.env.DATA_DIR || path.join(__dirname, 'data');
 fs.mkdirSync(DATA_DIR, { recursive: true });
 
 // 数据库选择：设置了 DATABASE_URL（如 Koyeb 托管 Postgres）则用 Postgres，否则用本地 SQLite
-const DATABASE_URL = process.env.DATABASE_URL || '';
+const DATABASE_URL = process.env.DATABASE_URL || process.env.POSTGRES_URL || process.env.POSTGRES_PRISMA_URL || '';
 const usePg = !!DATABASE_URL;
 
 let sqliteDb = null;
 let pgPool = null;
 if (usePg) {
   const { Pool } = require('pg');
-  const ssl = DATABASE_URL.startsWith('postgres://') ? { rejectUnauthorized: false } : false;
+  const ssl = /sslmode=disable/i.test(DATABASE_URL) ? false : { rejectUnauthorized: false };
   pgPool = new Pool({ connectionString: DATABASE_URL, ssl });
 } else {
   const { DatabaseSync } = require('node:sqlite');

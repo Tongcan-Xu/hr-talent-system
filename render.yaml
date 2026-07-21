@@ -1,0 +1,21 @@
+# Render 部署蓝图（Blueprint）
+# 在 Render 网页「New」→「Blueprint」导入本仓库即可自动按此配置部署
+# 说明文档见 部署指南.md
+services:
+  - type: web
+    name: hr-talent-system
+    runtime: node
+    plan: free
+    branch: main
+    buildCommand: npm install
+    startCommand: node server.js
+    healthCheckPath: /api/auth/me
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: DATABASE_URL
+        sync: false   # 部署时在 Render 后台粘贴 Neon 的数据库连接串
+      - key: COMPANY_KEY
+        sync: false   # 部署时设置公司密钥（同事注册用）
+      - key: ADMIN_PASSWORD
+        sync: false   # 部署时设置管理员密码

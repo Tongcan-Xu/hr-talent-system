@@ -13,3 +13,11 @@ node_modules/
 
 # 本地工作区元数据
 .workbuddy/
+
+# 部署工具（Koyeb CLI 二进制，本地用，不入库）
+koyeb-bin/
+koyeb-cli.zip
+koyeb-cli.tar.gz
+koyeb_install.sh
+.koyeb.yaml
+.koyeb/
