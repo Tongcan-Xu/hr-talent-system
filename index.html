@@ -1,0 +1,41 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>人才管理系统 · 北京华联</title>
+<link rel="stylesheet" href="/style.css">
+</head>
+<body>
+<div id="login" class="login-wrap"></div>
+
+<div id="app" class="app hidden">
+  <aside class="sidebar">
+    <div class="brand">人才管理系统</div>
+    <nav class="nav">
+      <a href="#/dashboard" data-route="dashboard">📊 数据看板</a>
+      <a href="#/recruitment" data-route="recruitment">🔄 招聘流程</a>
+      <a href="#/onboarding" data-route="onboarding">📝 入职办理</a>
+      <a href="#/talent" data-route="talent">🗂️ 人才库</a>
+      <a href="#/employees" data-route="employees">👥 员工</a>
+      <a href="#/settings" data-route="settings">⚙️ 设置</a>
+    </nav>
+  </aside>
+  <main class="main">
+    <header class="topbar">
+      <div class="page-title" id="pageTitle">数据看板</div>
+      <div class="user-box">
+        <span id="userName">—</span>
+        <button class="btn-ghost" id="logoutBtn">退出</button>
+      </div>
+    </header>
+    <section id="view" class="view"></section>
+  </main>
+</div>
+
+<div id="modal" class="modal-overlay hidden"></div>
+<div id="toast" class="toast hidden"></div>
+
+<script src="/app.js"></script>
+</body>
+</html>
