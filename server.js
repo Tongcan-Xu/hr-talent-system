@@ -275,14 +275,17 @@ const server = http.createServer(async (req, res) => {
     const pathname = url.pathname;
     const q = url.searchParams;
 
-    // 健康检查（不依赖数据库，供平台存活探测，务必 200）
-    if (pathname === '/api/health' && req.method === 'GET') {
-      return sendJSON(res, 200, { ok: true, db: usePg ? 'postgres' : 'sqlite', time: now() });
-    }
-    // 兼容 CloudBase / K8s 等平台默认健康检查路径（/health、/healthz、/）
-    if ((pathname === '/health' || pathname === '/healthz') && req.method === 'GET') {
-      res.writeHead(200, { 'Content-Type': 'application/json' });
-      return res.end(JSON.stringify({ status: 'ok' }));
+    // 健康检查（双保险）：平台探活路径/方法各异，统一返回 200，绝不让探活失败 → INVALID_PATH
+    // 覆盖：任意 HEAD 请求（网关/负载均衡常用 HEAD 探活）、以及常见 GET 探活路径
+    const isHealthProbe =
+      req.method === 'HEAD' ||
+      (req.method === 'GET' && (
+        /^\/(health|healthz|ping|status|ready|live)(\/|$)/i.test(pathname) ||
+        pathname === '/api/health' || pathname.startsWith('/api/health/')
+      ));
+    if (isHealthProbe) {
+      res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
+      return res.end(req.method === 'HEAD' ? '' : JSON.stringify({ status: 'ok', db: usePg ? 'postgres' : 'sqlite', time: now() }));
     }
 
     // Static files
