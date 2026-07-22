@@ -221,6 +221,15 @@ function openCandidateForm(c) {
   const isEdit = !!c;
   const v = (k) => c ? esc(c[k] || '') : '';
   openModal(isEdit ? '编辑候选人' : '新增候选人', `
+    <div style="background:#f7f8fa;border:1px dashed #d0d5dd;border-radius:8px;padding:10px 12px;margin-bottom:14px">
+      <div class="field" style="margin:0"><label>上传简历自动识别</label>
+        <div style="display:flex;gap:8px;align-items:center;margin-top:4px">
+          <input type="file" id="resumeFile" accept=".pdf,.docx,.txt,.jpg,.jpeg,.png" style="flex:1;padding:6px">
+          <button class="btn-sm" id="ruBtn" type="button">识别并填入</button>
+        </div>
+        <div class="muted" id="ruStatus" style="margin-top:6px;font-size:12px">支持 PDF / Word / TXT / 图片(JPG/PNG)，识别后自动填入下方，请核对修改</div>
+      </div>
+    </div>
     <div class="row2">
       <div class="field"><label>姓名 *</label><input name="name" value="${v('name')}"></div>
       <div class="field"><label>性别</label><select name="gender"><option value="">不限</option>${['男', '女'].map(g => `<option ${c && c.gender === g ? 'selected' : ''}>${g}</option>`).join('')}</select></div>
@@ -249,6 +258,26 @@ function openCandidateForm(c) {
     <div class="field"><label>备注</label><textarea name="notes">${v('notes')}</textarea></div>
     <div class="modal-actions"><button class="btn-ghost" onclick="closeModal()">取消</button><button class="btn" id="saveC">保存</button></div>
   `);
+  $('#ruBtn').onclick = async () => {
+    const f = $('#resumeFile').files[0];
+    if (!f) { toast('请先选择简历文件'); return; }
+    const st = $('#ruStatus'); st.textContent = '识别中…';
+    try {
+      const fd = new FormData();
+      fd.append('file', f);
+      const resp = await fetch('/api/parse-resume', { method: 'POST', headers: { 'Authorization': 'Bearer ' + token }, body: fd });
+      const d = await resp.json();
+      if (!resp.ok) { st.textContent = '识别失败：' + (d.error || '未知错误'); return; }
+      const map = { name: 'name', phone: 'phone', email: 'email', position: 'position', education: 'education', current_org: 'current_org', expected_salary: 'expected_salary' };
+      const filled = [];
+      for (const [k, sel] of Object.entries(map)) {
+        const el = $(`#modal [name="${sel}"]`);
+        if (d.fields[k] && el && !el.value.trim()) { el.value = d.fields[k]; filled.push(k); }
+      }
+      const tip = d.usedOcr ? '（图片已OCR识别）' : '';
+      st.textContent = filled.length ? ('已自动填入：' + filled.join('、') + ' ' + tip + '，请核对') : '未提取到可填字段，请手动输入';
+    } catch (e) { st.textContent = '识别出错：' + e.message; }
+  };
   $('#saveC').onclick = async () => {
     const f = $('#modal').querySelectorAll('input,select,textarea');
     const body = {}; f.forEach(el => body[el.name] = el.value.trim());

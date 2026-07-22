@@ -3,6 +3,10 @@ const http = require('node:http');
 const crypto = require('node:crypto');
 const fs = require('node:fs');
 const path = require('node:path');
+const multer = require('multer');
+const { parseResume } = require('./resume.js');
+// 简历上传：存内存，限制 15MB（含 PDF/Word/图片）
+const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 15 * 1024 * 1024 } });
 
 // 进程级兜底：任何未捕获异常 / 未处理的 Promise 拒绝都只记日志、绝不退出进程。
 // 容器平台（CloudBase 等）下，进程一旦退出，网关就会失去后端、再次 INVALID_PATH。
@@ -291,6 +295,23 @@ const server = http.createServer(async (req, res) => {
     // Static files
     if (req.method === 'GET' && !pathname.startsWith('/api/')) {
       return serveStatic(pathname, res);
+    }
+
+    // ---- Resume parse（上传简历自动识别关键信息）----
+    if (pathname === '/api/parse-resume' && req.method === 'POST') {
+      const user = await getUserFromToken(req);
+      if (!user) return sendJSON(res, 401, { error: '请先登录' });
+      return upload.single('file')(req, res, async () => {
+        try {
+          if (!req.file) return sendJSON(res, 400, { error: '未收到文件' });
+          const ext = path.extname(req.file.originalname || '');
+          const result = await parseResume(req.file.buffer, ext);
+          return sendJSON(res, 200, result);
+        } catch (e) {
+          const code = e.code === 'NO_OCR_KEY' ? 400 : 500;
+          return sendJSON(res, code, { error: e.message });
+        }
+      });
     }
 
     // ---- Auth endpoints ----

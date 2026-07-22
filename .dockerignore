@@ -1,6 +1,8 @@
 node_modules
 npm-debug.log
 koyeb-bin
+test_*.cjs
+*.test.cjs
 *.exe
 .workbuddy
 data
