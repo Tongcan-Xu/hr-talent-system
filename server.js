@@ -595,19 +595,21 @@ function serveStatic(pathname, res) {
 }
 
 // ---------- 启动 ----------
-(async () => {
-  // 数据库初始化失败不再致命退出：服务照常启动，数据库连通前接口会返回友好错误，
-  // 避免平台因启动时连不上库而判定“部署失败/反复重启”。
-  try {
-    await initSchema();
-    await seedAdmin();
-    console.log('数据库初始化成功');
-  } catch (e) {
-    console.error('数据库初始化警告（服务仍会启动，请检查 DATABASE_URL 与网络）:', e.message);
-  }
-  server.listen(PORT, HOST, () => {
-    console.log(`HR Talent System running at http://${HOST}:${PORT} [${usePg ? 'Postgres' : 'SQLite'}]`);
-  });
-})();
+// 关键：先 listen 打开端口，再在后台做数据库初始化。
+// 原因：CloudBase（及多数容器平台）启动后会立刻探活端口，
+// 若先等海外数据库连完才 listen，端口迟迟不开 → 探活判“不健康” → 网关不转发流量 → INVALID_PATH。
+server.listen(PORT, HOST, () => {
+  console.log(`HR Talent System listening on http://${HOST}:${PORT} [${usePg ? 'Postgres' : 'SQLite'}]`);
+  // 后台异步初始化数据库，不阻塞端口监听
+  (async () => {
+    try {
+      await initSchema();
+      await seedAdmin();
+      console.log('数据库初始化成功');
+    } catch (e) {
+      console.error('数据库初始化警告（服务仍运行，DB连通前接口返回友好错误）:', e.message);
+    }
+  })();
+});
 
 module.exports = server;
