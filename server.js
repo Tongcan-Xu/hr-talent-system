@@ -273,6 +273,11 @@ const server = http.createServer(async (req, res) => {
     if (pathname === '/api/health' && req.method === 'GET') {
       return sendJSON(res, 200, { ok: true, db: usePg ? 'postgres' : 'sqlite', time: now() });
     }
+    // 兼容 CloudBase / K8s 等平台默认健康检查路径（/health、/healthz、/）
+    if ((pathname === '/health' || pathname === '/healthz') && req.method === 'GET') {
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      return res.end(JSON.stringify({ status: 'ok' }));
+    }
 
     // Static files
     if (req.method === 'GET' && !pathname.startsWith('/api/')) {
