@@ -4,6 +4,12 @@ const crypto = require('node:crypto');
 const fs = require('node:fs');
 const path = require('node:path');
 
+// 进程级兜底：任何未捕获异常 / 未处理的 Promise 拒绝都只记日志、绝不退出进程。
+// 容器平台（CloudBase 等）下，进程一旦退出，网关就会失去后端、再次 INVALID_PATH。
+// 这里保证单点报错不会拖垮整个服务。
+process.on('uncaughtException', (e) => { console.error('[uncaughtException]', e && e.stack || e); });
+process.on('unhandledRejection', (e) => { console.error('[unhandledRejection]', e && e.stack || e); });
+
 const PORT = process.env.PORT || 3000;
 const HOST = '0.0.0.0';
 const PUBLIC_DIR = __dirname;
