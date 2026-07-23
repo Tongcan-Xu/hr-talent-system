@@ -271,18 +271,20 @@ function openCandidateForm(c) {
       const resp = await fetch('/api/parse-resume', { method: 'POST', headers: { 'Authorization': 'Bearer ' + token }, body: fd });
       const d = await resp.json();
       if (!resp.ok) { st.textContent = '识别失败：' + (d.error || '未知错误'); return; }
-      const map = { name: 'name', phone: 'phone', email: 'email', position: 'position', education: 'education', current_org: 'current_org', school: 'school', expected_salary: 'expected_salary' };
+      const map = { name: 'name', gender: 'gender', phone: 'phone', email: 'email', position: 'position', education: 'education', current_org: 'current_org', school: 'school', expected_salary: 'expected_salary' };
       const filled = [];
       for (const [k, sel] of Object.entries(map)) {
         const el = $(`#modal [name="${sel}"]`);
         if (d.fields[k] && el && !el.value.trim()) { el.value = d.fields[k]; filled.push(k); }
       }
-      // 履历：把识别出的简历原文填入文本框（供 HR 补充编辑）
+      // 履历：优先填 AI 整理的多段工作履历，否则回退简历原文
       const rtEl = $('#modal [name="resume_text"]');
-      if (d.text && rtEl && !rtEl.value.trim()) rtEl.value = d.text;
-      const tip = d.usedOcr ? '（图片已OCR识别）' : '';
+      const llmWork = d.fields && d.fields.work_experience_text;
+      if (rtEl && !rtEl.value.trim()) rtEl.value = llmWork || d.text || '';
+      const tip = (d.usedOcr ? '（图片OCR识别）' : '') + (d.usedLlm ? '（AI智能识别）' : '');
       const att = $('#attBox'); if (att) att.innerHTML = '已选择文件：<b>' + esc(f.name) + '</b> · 保存时将作为附件简历保留';
-      st.textContent = filled.length ? ('已自动填入：' + filled.join('、') + (rtEl && d.text ? '、履历原文' : '') + ' ' + tip + '，请核对') : '未提取到可填字段，请手动输入';
+      const filledLabel = filled.length ? ('已自动填入：' + filled.join('、') + (rtEl && (llmWork || d.text) ? '、工作履历' : '')) : '未提取到可填字段';
+      st.textContent = filledLabel + (tip ? ' ' + tip : '') + '，请核对';
     } catch (e) { st.textContent = '识别出错：' + e.message; }
   };
   if ($('#dlAtt')) $('#dlAtt').onclick = () => downloadAttachment(c.id, c.attachment_name);

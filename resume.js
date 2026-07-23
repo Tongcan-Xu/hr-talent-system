@@ -194,8 +194,70 @@ function ocrImage(buf) {
 }
 
 /**
+ * 调用大模型（OpenAI 兼容协议）对简历纯文本做结构化抽取。
+ * 需要环境变量 LLM_API_KEY；可选 LLM_BASE_URL（默认腾讯云混元 OpenAI 兼容端点）、LLM_MODEL。
+ * 返回对象或 null（未配置 key / 调用失败）。
+ */
+async function llmExtract(text) {
+  const apiKey = process.env.LLM_API_KEY;
+  if (!apiKey) return null;
+  const baseUrl = (process.env.LLM_BASE_URL || 'https://api.hunyuan.cloud.tencent.com/v1').replace(/\/$/, '');
+  const model = process.env.LLM_MODEL || 'hunyuan-standard';
+  const prompt = `你是一个专业的简历信息抽取助手。请从下面的简历文本中提取结构化信息，并以 JSON 格式输出，不要包含任何额外说明、不要使用 Markdown 代码块标记，只输出纯 JSON。
+要求字段：
+{
+  "name": "姓名（只提取真实姓名，不要带性别等后缀）",
+  "gender": "男 / 女 / 空字符串",
+  "phone": "手机号",
+  "email": "邮箱",
+  "position": "应聘职位或求职意向",
+  "education": "最高学历，如 本科 / 硕士 / 博士 / 大专",
+  "school": "最高学历对应的毕业院校（大学或学院全称）",
+  "current_org": "当前或最近任职的公司名称（不含职位）",
+  "expected_salary": "期望薪资，如 20K-30K",
+  "work_experience": [
+    {"period": "起止时间，如 2019.03-2021.06", "company": "公司名", "title": "职位", "description": "该段经历的核心职责与业绩，1-2 句"}
+  ]
+}
+注意：
+- 仅输出能从文本中推断出的内容，无法确定就留空字符串或空数组。
+- work_experience 按时间倒序（最近的在前），最多 5 段，每段职责用精简的中文描述。
+- 只输出 JSON，不要任何其他文字。`;
+
+  const body = {
+    model,
+    temperature: 0,
+    messages: [
+      { role: 'system', content: prompt },
+      { role: 'user', content: text.slice(0, 6000) }
+    ]
+  };
+  // hunyuan-lite 不支持 response_format，其余默认尝试 JSON 模式
+  if (model !== 'hunyuan-lite') body.response_format = { type: 'json_object' };
+
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 25000);
+  try {
+    const resp = await fetch(baseUrl + '/chat/completions', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + apiKey },
+      body: JSON.stringify(body),
+      signal: controller.signal
+    });
+    const json = await resp.json().catch(() => ({}));
+    if (json.error) throw new Error('LLM 返回错误：' + (json.error.message || JSON.stringify(json.error)));
+    const content = json.choices && json.choices[0] && json.choices[0].message && json.choices[0].message.content;
+    if (!content) throw new Error('LLM 未返回内容');
+    const clean = String(content).trim().replace(/^```(?:json)?\s*/i, '').replace(/```\s*$/, '').trim();
+    return JSON.parse(clean);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/**
  * 统一入口：根据扩展名解析文件为文本，并提取字段。
- * 返回 { text, fields, usedOcr }
+ * 返回 { text, fields, usedOcr, usedLlm }
  */
 async function parseResume(buf, ext) {
   const imgExts = ['.jpg', '.jpeg', '.png', '.bmp', '.gif'];
@@ -207,8 +269,52 @@ async function parseResume(buf, ext) {
   } else {
     text = await parseBuffer(buf, ext);
   }
-  const fields = extractFields(text);
-  return { text: text.slice(0, 8000), fields, usedOcr };
+  // 正则兜底
+  const re = extractFields(text);
+  // 大模型抽取（配置 LLM_API_KEY 时启用，失败自动回退正则）
+  let llm = null;
+  let usedLlm = false;
+  if (process.env.LLM_API_KEY) {
+    try {
+      llm = await llmExtract(text);
+      usedLlm = !!(llm && typeof llm === 'object');
+    } catch (e) {
+      console.error('[简历LLM抽取失败，已回退正则规则]:', e.message);
+      llm = null;
+    }
+  }
+  // 合并：LLM 优先，正则补缺
+  const pick = (k) => {
+    const lv = llm && llm[k];
+    if (lv !== undefined && lv !== null && String(lv).trim() !== '') return String(lv).trim();
+    return re[k] || '';
+  };
+  const fields = {
+    name: pick('name'),
+    gender: pick('gender'),
+    phone: pick('phone'),
+    email: pick('email'),
+    position: pick('position'),
+    education: pick('education'),
+    school: pick('school'),
+    current_org: pick('current_org'),
+    expected_salary: pick('expected_salary'),
+  };
+  // 工作履历：优先 LLM 结构化多段，整理为可读文本
+  let workText = '';
+  if (llm && Array.isArray(llm.work_experience) && llm.work_experience.length) {
+    workText = llm.work_experience.map((w) => {
+      const parts = [];
+      if (w.period) parts.push(w.period);
+      if (w.company) parts.push(w.company);
+      if (w.title) parts.push(w.title);
+      let line = parts.join(' | ');
+      if (w.description) line += '\n  ' + w.description;
+      return line;
+    }).filter(Boolean).join('\n\n');
+  }
+  if (workText) fields.work_experience_text = workText;
+  return { text: text.slice(0, 8000), fields, usedOcr, usedLlm };
 }
 
-module.exports = { extractFields, parseBuffer, ocrImage, parseResume };
+module.exports = { extractFields, parseBuffer, ocrImage, parseResume, llmExtract };
