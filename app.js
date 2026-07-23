@@ -228,6 +228,7 @@ function openCandidateForm(c) {
           <button class="btn-sm" id="ruBtn" type="button">识别并填入</button>
         </div>
         <div class="muted" id="ruStatus" style="margin-top:6px;font-size:12px">支持 PDF / Word / TXT / 图片(JPG/PNG)，识别后自动填入下方，请核对修改</div>
+        <div id="attBox" class="muted" style="margin-top:6px;font-size:12px">${isEdit && c && c.attachment_name ? `已存附件：<a href="javascript:void(0)" id="dlAtt" style="color:#2563eb">${esc(c.attachment_name)}</a> <span class="muted">· 重新选择文件可替换</span>` : '选择文件并识别后，保存时会自动作为「附件简历」保留'}</div>
       </div>
     </div>
     <div class="row2">
@@ -248,14 +249,16 @@ function openCandidateForm(c) {
     </div>
     <div class="row2">
       <div class="field"><label>期望薪资</label><input name="expected_salary" value="${v('expected_salary')}"></div>
-      <div class="field"><label>当前公司/学校</label><input name="current_org" value="${v('current_org')}"></div>
+      <div class="field"><label>当前公司</label><input name="current_org" value="${v('current_org')}"></div>
     </div>
     <div class="row2">
+      <div class="field"><label>毕业院校</label><input name="school" value="${v('school')}"></div>
       <div class="field"><label>最高学历</label><select name="education">${EDU.map(s => `<option ${c && c.education === s ? 'selected' : ''}>${s}</option>`).join('')}</select></div>
-      <div class="field"><label>预计入职日期</label><input name="expected_onboard_date" type="date" value="${v('expected_onboard_date')}"></div>
     </div>
+    <div class="field"><label>预计入职日期</label><input name="expected_onboard_date" type="date" value="${v('expected_onboard_date')}"></div>
     <div class="field"><label>面试评价</label><textarea name="interview_note">${v('interview_note')}</textarea></div>
     <div class="field"><label>备注</label><textarea name="notes">${v('notes')}</textarea></div>
+    <div class="field"><label>履历 / 简历摘要</label><textarea name="resume_text" placeholder="上传简历识别后会自动填入原文，可手动补充候选人的工作履历、项目经历等">${v('resume_text')}</textarea></div>
     <div class="modal-actions"><button class="btn-ghost" onclick="closeModal()">取消</button><button class="btn" id="saveC">保存</button></div>
   `);
   $('#ruBtn').onclick = async () => {
@@ -268,26 +271,52 @@ function openCandidateForm(c) {
       const resp = await fetch('/api/parse-resume', { method: 'POST', headers: { 'Authorization': 'Bearer ' + token }, body: fd });
       const d = await resp.json();
       if (!resp.ok) { st.textContent = '识别失败：' + (d.error || '未知错误'); return; }
-      const map = { name: 'name', phone: 'phone', email: 'email', position: 'position', education: 'education', current_org: 'current_org', expected_salary: 'expected_salary' };
+      const map = { name: 'name', phone: 'phone', email: 'email', position: 'position', education: 'education', current_org: 'current_org', school: 'school', expected_salary: 'expected_salary' };
       const filled = [];
       for (const [k, sel] of Object.entries(map)) {
         const el = $(`#modal [name="${sel}"]`);
         if (d.fields[k] && el && !el.value.trim()) { el.value = d.fields[k]; filled.push(k); }
       }
+      // 履历：把识别出的简历原文填入文本框（供 HR 补充编辑）
+      const rtEl = $('#modal [name="resume_text"]');
+      if (d.text && rtEl && !rtEl.value.trim()) rtEl.value = d.text;
       const tip = d.usedOcr ? '（图片已OCR识别）' : '';
-      st.textContent = filled.length ? ('已自动填入：' + filled.join('、') + ' ' + tip + '，请核对') : '未提取到可填字段，请手动输入';
+      const att = $('#attBox'); if (att) att.innerHTML = '已选择文件：<b>' + esc(f.name) + '</b> · 保存时将作为附件简历保留';
+      st.textContent = filled.length ? ('已自动填入：' + filled.join('、') + (rtEl && d.text ? '、履历原文' : '') + ' ' + tip + '，请核对') : '未提取到可填字段，请手动输入';
     } catch (e) { st.textContent = '识别出错：' + e.message; }
   };
+  if ($('#dlAtt')) $('#dlAtt').onclick = () => downloadAttachment(c.id, c.attachment_name);
   $('#saveC').onclick = async () => {
     const f = $('#modal').querySelectorAll('input,select,textarea');
     const body = {}; f.forEach(el => body[el.name] = el.value.trim());
     if (!body.name) { toast('请填写姓名'); return; }
     try {
-      if (isEdit) await api('PUT', `/api/candidates/${c.id}`, body);
-      else await api('POST', '/api/candidates', body);
+      const saved = isEdit ? (await api('PUT', `/api/candidates/${c.id}`, body)).candidate
+                           : (await api('POST', '/api/candidates', body)).candidate;
+      // 若选择了文件，作为附件简历上传（同时写入履历原文）
+      const fileEl = $('#resumeFile');
+      if (fileEl && fileEl.files && fileEl.files[0]) {
+        const fd = new FormData();
+        fd.append('file', fileEl.files[0]);
+        fd.append('resume_text', body.resume_text || '');
+        await fetch(`/api/candidates/${saved.id}/attachment`, { method: 'POST', headers: { 'Authorization': 'Bearer ' + token }, body: fd });
+      }
       closeModal(); toast('已保存'); renderRecruitment(true);
     } catch (e) { toast(e.message); }
   };
+}
+
+// 下载候选人附件简历（带登录态）
+async function downloadAttachment(id, name) {
+  try {
+    const resp = await fetch(`/api/candidates/${id}/attachment`, { headers: { 'Authorization': 'Bearer ' + token } });
+    if (!resp.ok) { toast('下载失败：' + (resp.status === 404 ? '暂无附件' : '服务异常')); return; }
+    const blob = await resp.blob();
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url; a.download = name || 'resume'; a.click();
+    URL.revokeObjectURL(url);
+  } catch (e) { toast('下载出错：' + e.message); }
 }
 function openPoolForm(c) {
   openModal('转入人才库', `

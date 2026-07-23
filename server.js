@@ -62,9 +62,13 @@ CREATE TABLE IF NOT EXISTS candidates (
   expected_salary TEXT,
   current_org TEXT,
   education TEXT,
-  interview_note TEXT,
-  notes TEXT,
-  tags TEXT,
+    interview_note TEXT,
+    notes TEXT,
+    resume_text TEXT,
+    attachment_data TEXT,
+    attachment_name TEXT,
+    attachment_type TEXT,
+    tags TEXT,
   expected_onboard_date TEXT,
   hired_at TEXT,
   created_at TEXT NOT NULL,
@@ -126,6 +130,10 @@ const PG_SCHEMA = [
     education TEXT,
     interview_note TEXT,
     notes TEXT,
+    resume_text TEXT,
+    attachment_data TEXT,
+    attachment_name TEXT,
+    attachment_type TEXT,
     tags TEXT,
     expected_onboard_date TEXT,
     hired_at TEXT,
@@ -219,6 +227,25 @@ async function initSchema() {
   } else {
     sqliteDb.exec(SQLITE_SCHEMA);
   }
+  await migrateCandidates();
+}
+
+// 给已存在的 candidates 表补加「履历 / 附件」等新列（CREATE TABLE IF NOT EXISTS 不会改已有表）
+async function migrateCandidates() {
+  const cols = ['school', 'resume_text', 'attachment_data', 'attachment_name', 'attachment_type'];
+  if (usePg) {
+    for (const col of cols) {
+      await pgPool.query(`ALTER TABLE candidates ADD COLUMN IF NOT EXISTS ${col} TEXT`);
+    }
+  } else {
+    const existing = sqliteDb.prepare('PRAGMA table_info(candidates)').all().map((r) => r.name);
+    for (const col of cols) {
+      if (!existing.includes(col)) {
+        try { sqliteDb.exec(`ALTER TABLE candidates ADD COLUMN ${col} TEXT`); }
+        catch (e) { if (!/duplicate column/i.test(e.message)) throw e; }
+      }
+    }
+  }
 }
 async function seedAdmin() {
   const row = await db.prepare('SELECT COUNT(*) AS c FROM users').get();
@@ -234,6 +261,16 @@ function sendJSON(res, code, obj) {
   res.writeHead(code, { 'Content-Type': 'application/json; charset=utf-8', 'Access-Control-Allow-Origin': '*', 'Access-Control-Allow-Headers': 'Content-Type, Authorization', 'Access-Control-Allow-Methods': 'GET,POST,PUT,DELETE,OPTIONS' });
   res.end(body);
 }
+// 还原被错误按 Latin-1 解码的中文文件名（部分客户端/上传方式会这样）；已是正确中文则原样返回
+function fixMojibake(s) {
+  if (!s) return s;
+  try {
+    const re = Buffer.from(s, 'latin1').toString('utf8');
+    if (/[一-龥]/.test(re) && !/[一-龥]/.test(s)) return re;
+  } catch { /* ignore */ }
+  return s;
+}
+
 function readBody(req) {
   return new Promise((resolve, reject) => {
     let data = '';
@@ -269,6 +306,9 @@ async function logActivity(user, action, candidate, detail) {
 }
 
 const STAGES = ['简历筛选', '初试', '复试', '终面', 'Offer', '入职'];
+
+// 候选人查询统一列（故意排除 attachment_data 这个大字段，避免列表/详情把 base64 全量传回前端）
+const CAND_COLS = 'id,name,gender,phone,email,position,source,stage,status,owner_id,owner_name,expected_salary,current_org,education,school,interview_note,notes,resume_text,attachment_name,attachment_type,tags,expected_onboard_date,hired_at,created_at,updated_at';
 
 // ---------- Router ----------
 const server = http.createServer(async (req, res) => {
@@ -371,7 +411,7 @@ const server = http.createServer(async (req, res) => {
       const search = q.get('q');
       if (search) { clauses.push('(name LIKE ? OR phone LIKE ? OR position LIKE ?)'); const s = '%' + search + '%'; params.push(s, s, s); }
       const where = clauses.length ? 'WHERE ' + clauses.join(' AND ') : '';
-      const rows = await db.prepare(`SELECT * FROM candidates ${where} ORDER BY updated_at DESC`).all(...params);
+      const rows = await db.prepare(`SELECT ${CAND_COLS} FROM candidates ${where} ORDER BY updated_at DESC`).all(...params);
       return sendJSON(res, 200, { candidates: rows, stages: STAGES });
     }
 
@@ -381,11 +421,11 @@ const server = http.createServer(async (req, res) => {
       if (!b.name) return sendJSON(res, 400, { error: '请填写候选人姓名' });
       const stage = (b.stage !== undefined && b.stage !== '') ? Number(b.stage) : 0;
       const info = await db.prepare(`INSERT INTO candidates
-        (name, gender, phone, email, position, source, stage, status, owner_id, owner_name, expected_salary, current_org, education, interview_note, notes, tags, expected_onboard_date, created_at, updated_at)
-        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`)
+        (name, gender, phone, email, position, source, stage, status, owner_id, owner_name, expected_salary, current_org, school, education, interview_note, notes, resume_text, tags, expected_onboard_date, created_at, updated_at)
+        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`)
         .run(b.name, b.gender || '', b.phone || '', b.email || '', b.position || '', b.source || '',
-          stage, 'active', user.id, user.name, b.expected_salary || '', b.current_org || '', b.education || '',
-          b.interview_note || '', b.notes || '', b.tags || '', b.expected_onboard_date || '', now(), now());
+          stage, 'active', user.id, user.name, b.expected_salary || '', b.current_org || '', b.school || '', b.education || '',
+          b.interview_note || '', b.notes || '', b.resume_text || '', b.tags || '', b.expected_onboard_date || '', now(), now());
       const cand = await db.prepare('SELECT * FROM candidates WHERE id = ?').get(Number(info.lastInsertRowid));
       await logActivity(user, '新增候选人', cand, `添加候选人 ${cand.name}（${STAGES[stage]}）`);
       return sendJSON(res, 200, { candidate: cand });
@@ -396,7 +436,7 @@ const server = http.createServer(async (req, res) => {
     if (m) {
       const id = Number(m[1]);
       if (req.method === 'GET') {
-        const c = await db.prepare('SELECT * FROM candidates WHERE id = ?').get(id);
+        const c = await db.prepare(`SELECT ${CAND_COLS} FROM candidates WHERE id = ?`).get(id);
         if (!c) return sendJSON(res, 404, { error: '未找到' });
         return sendJSON(res, 200, { candidate: c });
       }
@@ -411,11 +451,13 @@ const server = http.createServer(async (req, res) => {
           owner_id: (b.owner_id !== undefined) ? b.owner_id : c.owner_id,
           owner_name: (b.owner_name !== undefined) ? b.owner_name : c.owner_name,
           expected_salary: b.expected_salary ?? c.expected_salary, current_org: b.current_org ?? c.current_org,
-          education: b.education ?? c.education, interview_note: b.interview_note ?? c.interview_note,
-          notes: b.notes ?? c.notes, tags: b.tags ?? c.tags, expected_onboard_date: b.expected_onboard_date ?? c.expected_onboard_date
+          school: b.school ?? c.school, education: b.education ?? c.education,
+          interview_note: b.interview_note ?? c.interview_note,
+          notes: b.notes ?? c.notes, resume_text: b.resume_text ?? c.resume_text,
+          tags: b.tags ?? c.tags, expected_onboard_date: b.expected_onboard_date ?? c.expected_onboard_date
         };
-        await db.prepare(`UPDATE candidates SET name=?,gender=?,phone=?,email=?,position=?,source=?,stage=?,owner_id=?,owner_name=?,expected_salary=?,current_org=?,education=?,interview_note=?,notes=?,tags=?,expected_onboard_date=?,updated_at=? WHERE id=?`)
-          .run(upd.name, upd.gender, upd.phone, upd.email, upd.position, upd.source, upd.stage, upd.owner_id, upd.owner_name, upd.expected_salary, upd.current_org, upd.education, upd.interview_note, upd.notes, upd.tags, upd.expected_onboard_date, now(), id);
+        await db.prepare(`UPDATE candidates SET name=?,gender=?,phone=?,email=?,position=?,source=?,stage=?,owner_id=?,owner_name=?,expected_salary=?,current_org=?,school=?,education=?,interview_note=?,notes=?,resume_text=?,tags=?,expected_onboard_date=?,updated_at=? WHERE id=?`)
+          .run(upd.name, upd.gender, upd.phone, upd.email, upd.position, upd.source, upd.stage, upd.owner_id, upd.owner_name, upd.expected_salary, upd.current_org, upd.school, upd.education, upd.interview_note, upd.notes, upd.resume_text, upd.tags, upd.expected_onboard_date, now(), id);
         const nc = await db.prepare('SELECT * FROM candidates WHERE id = ?').get(id);
         await logActivity(user, '更新候选人', nc, `更新 ${nc.name} 的资料`);
         return sendJSON(res, 200, { candidate: nc });
@@ -427,6 +469,40 @@ const server = http.createServer(async (req, res) => {
         await logActivity(user, '删除候选人', c, `删除候选人 ${c.name}`);
         return sendJSON(res, 200, { ok: true });
       }
+    }
+
+    // ---- 候选人简历附件：上传 / 下载 ----
+    const mAtt = pathname.match(/^\/api\/candidates\/(\d+)\/attachment$/);
+    if (mAtt) {
+      const id = Number(mAtt[1]);
+      if (req.method === 'GET') {
+        const c = await db.prepare('SELECT attachment_data, attachment_name, attachment_type FROM candidates WHERE id = ?').get(id);
+        if (!c || !c.attachment_data) return sendJSON(res, 404, { error: '该候选人暂无附件简历' });
+        const buf = Buffer.from(c.attachment_data, 'base64');
+        const fname = encodeURIComponent(c.attachment_name || 'resume');
+        res.writeHead(200, {
+          'Content-Type': c.attachment_type || 'application/octet-stream',
+          'Content-Disposition': `attachment; filename*=UTF-8''${fname}`,
+          'Content-Length': buf.length,
+          'Cache-Control': 'no-store'
+        });
+        return res.end(buf);
+      }
+      if (req.method === 'POST') {
+        return upload.single('file')(req, res, async () => {
+          try {
+            if (!req.file) return sendJSON(res, 400, { error: '未收到文件' });
+            const b64 = req.file.buffer.toString('base64');
+            const fname = fixMojibake(req.file.originalname || 'resume');
+            // resume_text：本次一并提交解析全文则写入；为空则保留原值
+            const rt = (req.body && req.body.resume_text) ? String(req.body.resume_text) : '';
+            await db.prepare(`UPDATE candidates SET attachment_data=?, attachment_name=?, attachment_type=?, resume_text = CASE WHEN ? = '' THEN resume_text ELSE ? END, updated_at=? WHERE id=?`)
+              .run(b64, fname, req.file.mimetype || 'application/octet-stream', rt, rt, now(), id);
+            return sendJSON(res, 200, { ok: true, name: fname });
+          } catch (e) { return sendJSON(res, 500, { error: e.message }); }
+        });
+      }
+      return sendJSON(res, 405, { error: '方法不支持' });
     }
 
     // advance stage

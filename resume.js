@@ -17,6 +17,8 @@ const mammoth = require('mammoth');
 function extractFields(text) {
   const f = {};
   const clean = (s) => (s || '').replace(/\s+/g, ' ').replace(/[，,；;]/g, ' ').trim();
+  // 去除中文名内部可能由 OCR 引入的间隔空格/间隔符（如「张 三」「张·三」）
+  const normCN = (s) => (s || '').replace(/[\s・•·・]/g, '');
 
   // 手机号（含可选的 +86 / 86 前缀）
   const phone = text.match(/(?:\+?86[-\s]?)?(1[3-9]\d{9})/);
@@ -26,21 +28,41 @@ function extractFields(text) {
   const email = text.match(/[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/);
   if (email) f.email = email[0];
 
-  // 姓名：优先匹配「姓名：张三」形式
-  const nameM = text.match(/(?:姓名|名字)\s*[:：]?\s*([\u4e00-\u9fa5]{2,4}(?:\·[\u4e00-\u9fa5]{1,2})?)/);
-  if (nameM) f.name = nameM[1].trim();
-  // 退而求其次：简历开头连续 2-3 个汉字且不是常见称呼词
-  if (!f.name) {
-    const cand = text.match(/^\s*([\u4e00-\u9fa5]{2,3})\s*(?:\n|$)/);
-    const stop = ['尊敬的', '个人', '简历', '基本信息', '联系电话', '求职'];
-    if (cand && !stop.includes(cand[1])) f.name = cand[1];
+  // ===== 姓名 =====
+  let name = null;
+  // 1) 显式标签（兼容 OCR 在姓名与字号之间产生的间隔空格）
+  let m = text.match(/(?:姓\s*名|名\s*字|Name)\s*[:：]?\s*([\u4e00-\u9fa5](?:[ \t]*[\u4e00-\u9fa5]){1,3})/i);
+  if (m) name = normCN(m[1]);
+  // 2) 简历顶部「张三 男 28岁」或「张三/男」写法（姓名后紧跟性别）
+  if (!name) {
+    m = text.match(/^\s*([\u4e00-\u9fa5]{2,4})[ \t]*(?:[·•·\s]*)(?:男|女)\b/);
+    if (m) name = normCN(m[1]);
   }
+  // 3) 顶部独立一行 2-4 个汉字（跳过常见标题词/机构名）
+  if (!name) {
+    const stop = ['个人简历', '简历', '求职简历', '我的简历', '基本信息', '个人资料', '个人信息', '个人基本',
+      '联系电话', '联系我们', '联系方式', 'RESUME', 'CURRICULUM', 'PROFILE', '应聘'];
+    const lines = text.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
+    for (const line of lines.slice(0, 8)) {
+      const cm = line.match(/^([\u4e00-\u9fa5]{2,4})$/);
+      if (cm && !stop.includes(line) && !/(大学|公司|学院|医院|学校|集团|有限公司)/.test(line)) {
+        name = cm[1];
+        break;
+      }
+    }
+  }
+  // 4) 英文名
+  if (!name) {
+    m = text.match(/(?:name)\s*[:：]?\s*([A-Z][a-z]+(?:[ \t][A-Z][a-z]+)+)/i);
+    if (m) name = m[1].trim();
+  }
+  if (name) f.name = name;
 
   // 应聘职位 / 求职意向
   const posM = text.match(/(?:应聘职位|求职意向|目标职位|期望职位|应聘岗位|应聘方向)\s*[:：]?\s*([^\n，。,；;]{2,24})/);
   if (posM) f.position = clean(posM[1]);
 
-  // 学历
+  // ===== 学历（学位）=====
   const eduMap = { '硕士研究生': '硕士', '全日制本科': '本科', '大学本科': '本科' };
   const eduM = text.match(/(?:学历|教育背景|学位)\s*[:：]?\s*(本科|硕士研究生|硕士|研究生|博士|大专|专科|全日制本科)/);
   if (eduM) f.education = eduMap[eduM[1]] || eduM[1];
@@ -49,9 +71,23 @@ function extractFields(text) {
     if (edu2) f.education = edu2[1];
   }
 
-  // 当前公司 / 毕业院校
-  const orgM = text.match(/(?:所在公司|当前公司|公司名称|就职于|毕业院校|毕业学校|就读于|院校)\s*[:：]?\s*([^\n，。,；;]{2,24})/);
-  if (orgM) f.current_org = clean(orgM[1]);
+  // ===== 毕业院校（与「公司」分离，避免互相串扰）=====
+  let school = null;
+  m = text.match(/(?:毕业院校|毕业学校|毕业自|毕业于|就读[院学]校|院校|学校)\s*[:：]?\s*([^\n，。,；;]{2,28}?(?:大学|学院|学校|中学|Institute|University|College)[^\n，。,；;]{0,12})/i);
+  if (m) school = clean(m[1]);
+  if (!school) {
+    m = text.match(/([\u4e00-\u9fa5]{2,14}?(?:大学|学院|学校))(?!\s*(?:生|毕业))/);
+    if (m) school = m[1];
+  }
+  if (school) f.school = school;
+
+  // ===== 当前公司（仅匹配公司类标签，避免误抓学校）=====
+  m = text.match(/(?:现任职于|就职于|任职于|所在公司|当前公司|公司名称|公司)\s*[:：]?\s*([^\n，。,；;]{2,24})/);
+  if (m) {
+    f.current_org = clean(m[1])
+      .replace(/^于[ \t]*/, '')
+      .replace(/(?:\s*(?:高级|资深|初级|中级|技术|工程师|经理|总监|主管|专员|专家|负责人|助理|员|生))+$/, '');
+  }
 
   // 期望薪资
   const salM = text.match(/(?:期望薪资|薪资要求|薪酬要求|期望薪酬|薪资)\s*[:：]?\s*([^\n，。,；;]{1,16})/);
@@ -172,7 +208,7 @@ async function parseResume(buf, ext) {
     text = await parseBuffer(buf, ext);
   }
   const fields = extractFields(text);
-  return { text: text.slice(0, 4000), fields, usedOcr };
+  return { text: text.slice(0, 8000), fields, usedOcr };
 }
 
 module.exports = { extractFields, parseBuffer, ocrImage, parseResume };
