@@ -195,14 +195,16 @@ function ocrImage(buf) {
 
 /**
  * 调用大模型（OpenAI 兼容协议）对简历纯文本做结构化抽取。
- * 需要环境变量 LLM_API_KEY；可选 LLM_BASE_URL（默认腾讯云混元 OpenAI 兼容端点）、LLM_MODEL。
+ * 需要环境变量 LLM_API_KEY；可选 LLM_BASE_URL（默认腾讯云 TokenHub 端点）、LLM_MODEL。
+ * 说明：原混元控制台已于 2026-06 迁移至腾讯云大模型服务平台 TokenHub，
+ *       API Key 在 https://console.cloud.tencent.com/tokenhub/apikey 创建。
  * 返回对象或 null（未配置 key / 调用失败）。
  */
 async function llmExtract(text) {
   const apiKey = process.env.LLM_API_KEY;
   if (!apiKey) return null;
-  const baseUrl = (process.env.LLM_BASE_URL || 'https://api.hunyuan.cloud.tencent.com/v1').replace(/\/$/, '');
-  const model = process.env.LLM_MODEL || 'hunyuan-standard';
+  const baseUrl = (process.env.LLM_BASE_URL || 'https://tokenhub.tencentmaas.com/v1').replace(/\/$/, '');
+  const model = process.env.LLM_MODEL || 'deepseek-v4-flash';
   const prompt = `你是一个专业的简历信息抽取助手。请从下面的简历文本中提取结构化信息，并以 JSON 格式输出，不要包含任何额外说明、不要使用 Markdown 代码块标记，只输出纯 JSON。
 要求字段：
 {
@@ -232,8 +234,8 @@ async function llmExtract(text) {
       { role: 'user', content: text.slice(0, 6000) }
     ]
   };
-  // hunyuan-lite 不支持 response_format，其余默认尝试 JSON 模式
-  if (model !== 'hunyuan-lite') body.response_format = { type: 'json_object' };
+  // 部分轻量模型不支持 response_format，其余默认尝试 JSON 模式
+  if (!/lite/i.test(model)) body.response_format = { type: 'json_object' };
 
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), 25000);
