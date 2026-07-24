@@ -276,6 +276,7 @@ async function parseResume(buf, ext) {
   // 大模型抽取（配置 LLM_API_KEY 时启用，失败自动回退正则）
   let llm = null;
   let usedLlm = false;
+  let llmError = null;
   if (process.env.LLM_API_KEY) {
     try {
       llm = await llmExtract(text);
@@ -283,6 +284,7 @@ async function parseResume(buf, ext) {
     } catch (e) {
       console.error('[简历LLM抽取失败，已回退正则规则]:', e.message);
       llm = null;
+      llmError = e.message;
     }
   }
   // 合并：LLM 优先，正则补缺
@@ -316,7 +318,7 @@ async function parseResume(buf, ext) {
     }).filter(Boolean).join('\n\n');
   }
   if (workText) fields.work_experience_text = workText;
-  return { text: text.slice(0, 8000), fields, usedOcr, usedLlm };
+  return { text: text.slice(0, 8000), fields, usedOcr, usedLlm, llmError, llmSkipped: !process.env.LLM_API_KEY };
 }
 
 module.exports = { extractFields, parseBuffer, ocrImage, parseResume, llmExtract };
