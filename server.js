@@ -305,6 +305,38 @@ async function logActivity(user, action, candidate, detail) {
   } catch (e) { /* ignore */ }
 }
 
+// 单份简历「解析 + 直接建候选人 + 存附件」一体化（供批量导入复用）
+// 返回 { candidate, usedLlm, usedOcr }
+async function importResumeFile(buf, ext, originalname, mimetype, user) {
+  const parsed = await parseResume(buf, ext);
+  const f = parsed.fields || {};
+  // 候选姓名：优先识别到的姓名；否则用文件名（去扩展名、还原乱码）兜底
+  let name = (f.name || '').trim();
+  if (!name) {
+    const base = (fixMojibake(originalname || '简历') || '简历').replace(/\.[^.]+$/, '');
+    name = base || '未命名候选人';
+  }
+  const rawText = parsed.text || '';
+  const workText = (f.work_experience_text || '').trim();
+  const resumeText = workText || rawText.slice(0, 4000);
+  const stage = 0;
+  const info = await db.prepare(`INSERT INTO candidates
+    (name, gender, phone, email, position, source, stage, status, owner_id, owner_name, expected_salary, current_org, school, education, interview_note, notes, resume_text, tags, expected_onboard_date, created_at, updated_at)
+    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`)
+    .run(name, f.gender || '', f.phone || '', f.email || '', f.position || '', '批量导入',
+      stage, 'active', user.id, user.name, f.expected_salary || '', f.current_org || '', f.school || '', f.education || '',
+      '', '', resumeText, '', '', now(), now());
+  const candId = Number(info.lastInsertRowid);
+  // 存附件（base64）
+  const b64 = buf.toString('base64');
+  const fname = fixMojibake(originalname || 'resume');
+  await db.prepare(`UPDATE candidates SET attachment_data=?, attachment_name=?, attachment_type=?, updated_at=? WHERE id=?`)
+    .run(b64, fname, mimetype || 'application/octet-stream', now(), candId);
+  const cand = await db.prepare('SELECT * FROM candidates WHERE id = ?').get(candId);
+  await logActivity(user, '批量导入简历', cand, `批量导入 ${cand.name}` + (parsed.usedLlm ? '（AI智能识别）' : ''));
+  return { candidate: cand, usedLlm: parsed.usedLlm, usedOcr: parsed.usedOcr };
+}
+
 const STAGES = ['简历筛选', '初试', '复试', '终面', 'Offer', '入职'];
 
 // 候选人查询统一列（故意排除 attachment_data 这个大字段，避免列表/详情把 base64 全量传回前端）
@@ -429,6 +461,21 @@ const server = http.createServer(async (req, res) => {
       const cand = await db.prepare('SELECT * FROM candidates WHERE id = ?').get(Number(info.lastInsertRowid));
       await logActivity(user, '新增候选人', cand, `添加候选人 ${cand.name}（${STAGES[stage]}）`);
       return sendJSON(res, 200, { candidate: cand });
+    }
+
+    // 批量导入：单份简历「解析 + 直接建候选人 + 存附件」（前端循环调用，每份一次请求）
+    if (pathname === '/api/candidates/import' && req.method === 'POST') {
+      return upload.single('file')(req, res, async () => {
+        try {
+          if (!req.file) return sendJSON(res, 400, { error: '未收到文件' });
+          const ext = path.extname(req.file.originalname || '');
+          const result = await importResumeFile(req.file.buffer, ext, req.file.originalname, req.file.mimetype, user);
+          return sendJSON(res, 200, result);
+        } catch (e) {
+          const code = e.code === 'NO_OCR_KEY' ? 400 : 500;
+          return sendJSON(res, code, { error: e.message });
+        }
+      });
     }
 
     // candidate detail / update / delete

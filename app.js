@@ -173,12 +173,14 @@ async function renderRecruitment(silent) {
       <input class="grow" id="fQ" placeholder="搜索姓名 / 手机号 / 职位" value="${esc(recFilter.q)}">
       ${stageTabs}
       <button class="btn" id="addC">+ 新增候选人</button>
+      <button class="btn btn-line" id="batchImport">批量导入简历</button>
     </div>
     <div class="toolbar" style="margin-top:-6px">${statusTabs}</div>
     <table><thead><tr><th>姓名</th><th>应聘职位</th><th>阶段</th><th>状态</th><th>负责人</th><th>来源</th><th>操作</th></tr></thead><tbody>${rows}</tbody></table>`;
   $('#fQ').oninput = e => { recFilter.q = e.target.value; clearTimeout(e.target._t); e.target._t = setTimeout(() => renderRecruitment(true), 350); };
   $('#fStage').onchange = e => { recFilter.stage = e.target.value; renderRecruitment(true); };
   $('#addC').onclick = () => openCandidateForm(null);
+  $('#batchImport').onclick = openBatchImport;
   document.querySelectorAll('[data-st]').forEach(b => b.onclick = () => { recFilter.status = b.dataset.st; renderRecruitment(true); });
   bindRowActions(candidates);
 }
@@ -306,6 +308,82 @@ function openCandidateForm(c) {
       closeModal(); toast('已保存'); renderRecruitment(true);
     } catch (e) { toast(e.message); }
   };
+}
+
+// 批量导入简历：一次最多 50 份，逐份调用 /api/candidates/import，带进度与结果汇总
+function openBatchImport() {
+  openModal('批量导入简历', `
+    <p class="muted">一次最多上传 <b>50</b> 份简历（PDF / Word / TXT / 图片）。系统会自动识别每份简历并生成候选人，导入后请逐个核对信息。</p>
+    <div class="field" style="margin-top:10px"><label>选择简历文件（可多选，最多 50 份）</label>
+      <input type="file" id="batchFiles" accept=".pdf,.docx,.txt,.jpg,.jpeg,.png" multiple>
+    </div>
+    <div class="muted" id="batchCount" style="font-size:12px">尚未选择文件</div>
+    <div id="batchProgress" style="margin-top:12px;display:none">
+      <div class="progress"><span id="batchBar" style="width:0%"></span></div>
+      <div class="muted" id="batchProgText" style="font-size:12px;margin-top:6px">处理中 0/0</div>
+    </div>
+    <div id="batchResult" style="margin-top:12px"></div>
+    <div class="modal-actions"><button class="btn-ghost" onclick="closeModal()">取消</button><button class="btn" id="batchGo" disabled>开始导入</button></div>
+  `);
+  const fileInput = $('#batchFiles');
+  const updateCount = () => {
+    const n = fileInput.files.length;
+    const c = $('#batchCount');
+    if (n === 0) { c.textContent = '尚未选择文件'; $('#batchGo').disabled = true; return; }
+    if (n > 50) { c.innerHTML = `<span style="color:#dc2626">已选 ${n} 份，超过上限 50 份，请删减后再导入</span>`; $('#batchGo').disabled = true; return; }
+    c.textContent = `已选择 ${n} 份（最多 50 份）`;
+    $('#batchGo').disabled = false;
+  };
+  fileInput.onchange = updateCount;
+  $('#batchGo').onclick = () => doBatchImport(Array.from(fileInput.files));
+}
+async function doBatchImport(files) {
+  if (!files.length) return;
+  if (files.length > 50) { toast('一次最多 50 份'); return; }
+  $('#batchGo').disabled = true;
+  $('#batchFiles').disabled = true;
+  $('#batchProgress').style.display = 'block';
+  const progText = $('#batchProgText'), bar = $('#batchBar');
+  const total = files.length; let done = 0; const results = [];
+  const update = () => { progText.textContent = `处理中 ${done}/${total}`; bar.style.width = (done / total * 100) + '%'; };
+  update();
+  const CONC = 3; // 并发数，避免触发大模型限流
+  let idx = 0;
+  async function worker() {
+    while (idx < files.length) {
+      const i = idx++; const file = files[i];
+      try {
+        const fd = new FormData(); fd.append('file', file);
+        const resp = await fetch('/api/candidates/import', { method: 'POST', headers: { 'Authorization': 'Bearer ' + token }, body: fd });
+        const d = await resp.json().catch(() => ({}));
+        if (resp.ok && d.candidate) results.push({ ok: true, name: d.candidate.name, id: d.candidate.id, usedLlm: d.usedLlm });
+        else results.push({ ok: false, name: file.name, error: (d && d.error) || ('HTTP ' + resp.status) });
+      } catch (e) { results.push({ ok: false, name: file.name, error: e.message }); }
+      done++; update();
+    }
+  }
+  await Promise.all(Array.from({ length: Math.min(CONC, files.length) }, () => worker()));
+  bar.style.width = '100%';
+  const okList = results.filter(r => r.ok);
+  const failList = results.filter(r => !r.ok);
+  let html = `<div style="margin-bottom:8px"><b>导入完成：</b>成功 <span style="color:var(--green)">${okList.length}</span> 份，失败 <span style="color:#dc2626">${failList.length}</span> 份</div>`;
+  html += `<div class="section-title" style="margin-top:6px">成功（${okList.length}）</div><ul class="feed">${
+    okList.length ? okList.map(r => `<li><b>${esc(r.name)}</b>${r.usedLlm ? ' <span class="badge b-active">AI识别</span>' : ''} · <a href="javascript:void(0)" data-edit="${r.id}">查看/编辑</a></li>`).join('') : '<span class="muted">无</span>'
+  }</ul>`;
+  if (failList.length) {
+    html += `<div class="section-title" style="margin-top:10px">失败（${failList.length}）</div><ul class="feed">${
+      failList.map(r => `<li>${esc(r.name)} — <span style="color:#dc2626">${esc(r.error)}</span></li>`).join('')
+    }</ul>`;
+  }
+  $('#batchResult').innerHTML = html;
+  $('#batchResult').querySelectorAll('[data-edit]').forEach(a => a.onclick = () => { const id = a.dataset.edit; closeModal(); openEditById(id); });
+  renderRecruitment(true); // 后台刷新列表
+}
+async function openEditById(id) {
+  try {
+    const d = await api('GET', '/api/candidates/' + id);
+    openCandidateForm(d.candidate);
+  } catch (e) { toast(e.message); }
 }
 
 // 下载候选人附件简历（带登录态）
