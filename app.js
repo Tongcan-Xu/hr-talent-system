@@ -1,7 +1,7 @@
 'use strict';
 // ============ 基础 ============
 const STAGES = ['简历筛选', '初试', '复试', '终面', 'Offer', '入职'];
-const SOURCES = ['内推', '猎头', '官网', '招聘网站', '校园招聘', '其他'];
+const SOURCES = ['内推', '猎头', '官网', '猎聘', '智联', 'Boss', '校园招聘', '其他'];
 const EDU = ['大专', '本科', '硕士', '博士', '其他'];
 const STATUS_LABEL = { active: '招聘中', in_pool: '人才库', hired: '已入职', rejected: '已淘汰' };
 
@@ -261,6 +261,15 @@ function openCandidateForm(c) {
     <div class="field"><label>面试评价</label><textarea name="interview_note">${v('interview_note')}</textarea></div>
     <div class="field"><label>备注</label><textarea name="notes">${v('notes')}</textarea></div>
     <div class="field"><label>履历 / 简历摘要</label><textarea name="resume_text" placeholder="上传简历识别后会自动填入原文，可手动补充候选人的工作履历、项目经历等">${v('resume_text')}</textarea></div>
+    ${isEdit && c && c.id ? `
+    <hr style="margin:16px 0;border:none;border-top:1px dashed #d0d5dd">
+    <div class="section-title">简历备注（团队可见）</div>
+    <div class="muted" style="font-size:12px;margin-bottom:8px">每位成员都可添加备注，其他成员都能看到；仅自己或管理员可删除。</div>
+    <div id="notesWrap"><div class="muted">加载中…</div></div>
+    <div style="display:flex;gap:8px;margin-top:10px">
+      <textarea id="noteInput" placeholder="添加备注，例如：已电话沟通，期望薪资可谈 / 面试表现优秀…" style="flex:1;min-height:40px"></textarea>
+      <button class="btn-sm" id="addNoteBtn" type="button">添加备注</button>
+    </div>` : ''}
     <div class="modal-actions"><button class="btn-ghost" onclick="closeModal()">取消</button><button class="btn" id="saveC">保存</button></div>
   `);
   $('#ruBtn').onclick = async () => {
@@ -290,6 +299,37 @@ function openCandidateForm(c) {
     } catch (e) { st.textContent = '识别出错：' + e.message; }
   };
   if ($('#dlAtt')) $('#dlAtt').onclick = () => downloadAttachment(c.id, c.attachment_name);
+  // 简历备注（团队可见）：编辑模式下加载/新增/删除
+  if (isEdit && c && c.id) {
+    const notesWrap = $('#notesWrap');
+    const loadNotes = async () => {
+      try {
+        const d = await api('GET', '/api/candidates/' + c.id + '/notes');
+        const notes = (d && d.notes) || [];
+        if (!notes.length) { notesWrap.innerHTML = '<div class="muted">暂无备注，来做第一条吧</div>'; return; }
+        notesWrap.innerHTML = '<ul class="feed">' + notes.map(n => `
+          <li>
+            <div style="display:flex;justify-content:space-between;align-items:center;gap:8px">
+              <b>${esc(n.user_name)}</b>
+              <span class="muted" style="font-size:12px">${fmtTime(n.created_at)}${(n.user_id === me.id || me.role === 'admin') ? ' · <a href="javascript:void(0)" class="delNote" data-id="' + n.id + '" style="color:#dc2626">删除</a>' : ''}</span>
+            </div>
+            <div style="margin-top:3px;white-space:pre-wrap;line-height:1.5">${esc(n.content)}</div>
+          </li>`).join('') + '</ul>';
+        notesWrap.querySelectorAll('.delNote').forEach(a => a.onclick = async () => {
+          if (!confirm('确定删除这条备注？')) return;
+          try { await api('DELETE', `/api/candidates/${c.id}/notes/${a.dataset.id}`); await loadNotes(); }
+          catch (e) { toast(e.message); }
+        });
+      } catch (e) { notesWrap.innerHTML = '<div class="muted">备注加载失败</div>'; }
+    };
+    $('#addNoteBtn').onclick = async () => {
+      const inp = $('#noteInput'); const val = inp.value.trim();
+      if (!val) { toast('请输入备注内容'); return; }
+      try { await api('POST', '/api/candidates/' + c.id + '/notes', { content: val }); inp.value = ''; await loadNotes(); }
+      catch (e) { toast(e.message); }
+    };
+    loadNotes();
+  }
   $('#saveC').onclick = async () => {
     const f = $('#modal').querySelectorAll('input,select,textarea');
     const body = {}; f.forEach(el => body[el.name] = el.value.trim());

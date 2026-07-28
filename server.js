@@ -101,6 +101,14 @@ CREATE TABLE IF NOT EXISTS sessions (
   user_id INTEGER NOT NULL,
   expires_at TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS candidate_notes (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  candidate_id INTEGER NOT NULL,
+  user_id INTEGER NOT NULL,
+  user_name TEXT NOT NULL,
+  content TEXT NOT NULL,
+  created_at TEXT NOT NULL
+);
 `;
 
 const PG_SCHEMA = [
@@ -166,6 +174,14 @@ const PG_SCHEMA = [
     token TEXT PRIMARY KEY,
     user_id INTEGER NOT NULL,
     expires_at TEXT NOT NULL
+  )`,
+  `CREATE TABLE IF NOT EXISTS candidate_notes (
+    id SERIAL PRIMARY KEY,
+    candidate_id INTEGER NOT NULL,
+    user_id INTEGER NOT NULL,
+    user_name TEXT NOT NULL,
+    content TEXT NOT NULL,
+    created_at TEXT NOT NULL
   )`
 ];
 
@@ -190,7 +206,7 @@ function verifyPassword(pw, stored) {
 }
 
 // ---------- DB 抽象层（SQLite / Postgres 统一接口）----------
-const ID_TABLES = new Set(['users', 'candidates', 'onboarding', 'activities']);
+const ID_TABLES = new Set(['users', 'candidates', 'onboarding', 'activities', 'candidate_notes']);
 function toPgSql(sql) {
   let i = 0;
   return sql.replace(/\?/g, () => '$' + (++i));
@@ -516,6 +532,38 @@ const server = http.createServer(async (req, res) => {
         await logActivity(user, '删除候选人', c, `删除候选人 ${c.name}`);
         return sendJSON(res, 200, { ok: true });
       }
+    }
+
+    // ---- 候选人简历备注（多人协作，所有成员可见）----
+    const mNotes = pathname.match(/^\/api\/candidates\/(\d+)\/notes$/);
+    if (mNotes) {
+      const cid = Number(mNotes[1]);
+      if (req.method === 'GET') {
+        const c = await db.prepare('SELECT id FROM candidates WHERE id = ?').get(cid);
+        if (!c) return sendJSON(res, 404, { error: '未找到候选人' });
+        const notes = await db.prepare('SELECT * FROM candidate_notes WHERE candidate_id = ? ORDER BY created_at ASC').all(cid);
+        return sendJSON(res, 200, { notes });
+      }
+      if (req.method === 'POST') {
+        const b = await readBody(req);
+        const content = (b.content || '').trim();
+        if (!content) return sendJSON(res, 400, { error: '备注内容不能为空' });
+        const info = await db.prepare('INSERT INTO candidate_notes (candidate_id, user_id, user_name, content, created_at) VALUES (?,?,?,?,?)')
+          .run(cid, user.id, user.name, content, now());
+        const note = await db.prepare('SELECT * FROM candidate_notes WHERE id = ?').get(info.lastInsertRowid);
+        await logActivity(user, '简历备注', { id: cid, name: '候选人#' + cid }, `为候选人 #${cid} 添加备注`);
+        return sendJSON(res, 200, { note });
+      }
+      return sendJSON(res, 405, { error: '方法不支持' });
+    }
+    const mNoteDel = pathname.match(/^\/api\/candidates\/(\d+)\/notes\/(\d+)$/);
+    if (mNoteDel && req.method === 'DELETE') {
+      const cid = Number(mNoteDel[1]); const nid = Number(mNoteDel[2]);
+      const note = await db.prepare('SELECT * FROM candidate_notes WHERE id = ? AND candidate_id = ?').get(nid, cid);
+      if (!note) return sendJSON(res, 404, { error: '备注不存在' });
+      if (note.user_id !== user.id && user.role !== 'admin') return sendJSON(res, 403, { error: '只能删除自己添加的备注' });
+      await db.prepare('DELETE FROM candidate_notes WHERE id = ?').run(nid);
+      return sendJSON(res, 200, { ok: true });
     }
 
     // ---- 候选人简历附件：上传 / 下载 ----
