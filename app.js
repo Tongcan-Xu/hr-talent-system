@@ -166,8 +166,9 @@ async function renderRecruitment(silent) {
       <td>${statusBadge(c)}</td>
       <td>${esc(c.owner_name || '未分配')}</td>
       <td>${esc(c.source || '—')}</td>
+      <td>${c.notes_count ? c.notes_count + ' 条' : '—'}</td>
       <td class="row-actions">${actionBtns(c)}</td>
-    </tr>`).join('') : `<tr><td colspan="7" class="empty">没有候选人，点右上角「新增候选人」开始</td></tr>`;
+    </tr>`).join('') : `<tr><td colspan="8" class="empty">没有候选人，点右上角「新增候选人」开始</td></tr>`;
   view().innerHTML = `
     <div class="toolbar">
       <input class="grow" id="fQ" placeholder="搜索姓名 / 手机号 / 职位" value="${esc(recFilter.q)}">
@@ -176,7 +177,7 @@ async function renderRecruitment(silent) {
       <button class="btn btn-line" id="batchImport">批量导入简历</button>
     </div>
     <div class="toolbar" style="margin-top:-6px">${statusTabs}</div>
-    <table><thead><tr><th>姓名</th><th>应聘职位</th><th>阶段</th><th>状态</th><th>负责人</th><th>来源</th><th>操作</th></tr></thead><tbody>${rows}</tbody></table>`;
+    <table><thead><tr><th>姓名</th><th>应聘职位</th><th>阶段</th><th>状态</th><th>负责人</th><th>来源</th><th>团队备注</th><th>操作</th></tr></thead><tbody>${rows}</tbody></table>`;
   $('#fQ').oninput = e => { recFilter.q = e.target.value; clearTimeout(e.target._t); e.target._t = setTimeout(() => renderRecruitment(true), 350); };
   $('#fStage').onchange = e => { recFilter.stage = e.target.value; renderRecruitment(true); };
   $('#addC').onclick = () => openCandidateForm(null);
@@ -259,7 +260,6 @@ function openCandidateForm(c) {
     </div>
     <div class="field"><label>预计入职日期</label><input name="expected_onboard_date" type="date" value="${v('expected_onboard_date')}"></div>
     <div class="field"><label>面试评价</label><textarea name="interview_note">${v('interview_note')}</textarea></div>
-    <div class="field"><label>备注</label><textarea name="notes">${v('notes')}</textarea></div>
     <div class="field"><label>履历 / 简历摘要</label><textarea name="resume_text" placeholder="上传简历识别后会自动填入原文，可手动补充候选人的工作履历、项目经历等">${v('resume_text')}</textarea></div>
     ${isEdit && c && c.id ? `
     <hr style="margin:16px 0;border:none;border-top:1px dashed #d0d5dd">

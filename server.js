@@ -459,7 +459,7 @@ const server = http.createServer(async (req, res) => {
       const search = q.get('q');
       if (search) { clauses.push('(name LIKE ? OR phone LIKE ? OR position LIKE ?)'); const s = '%' + search + '%'; params.push(s, s, s); }
       const where = clauses.length ? 'WHERE ' + clauses.join(' AND ') : '';
-      const rows = await db.prepare(`SELECT ${CAND_COLS} FROM candidates ${where} ORDER BY updated_at DESC`).all(...params);
+      const rows = await db.prepare(`SELECT ${CAND_COLS}, (SELECT COUNT(*) FROM candidate_notes WHERE candidate_notes.candidate_id = candidates.id) AS notes_count FROM candidates ${where} ORDER BY updated_at DESC`).all(...params);
       return sendJSON(res, 200, { candidates: rows, stages: STAGES });
     }
 
