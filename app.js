@@ -112,14 +112,14 @@ async function startApp() {
 function bindNav() {
   document.querySelectorAll('.nav a').forEach(a => a.onclick = () => { location.hash = a.getAttribute('href'); });
 }
-const TITLES = { dashboard: '数据看板', recruitment: '招聘流程', onboarding: '入职办理', talent: '人才库', employees: '员工管理', settings: '系统设置' };
+const TITLES = { dashboard: '数据看板', recruitment: '招聘流程', onboarding: '入职办理', talent: '人才库', jds: 'JD库', employees: '员工管理', settings: '系统设置' };
 function route(silent) {
   let r = (location.hash || '#/dashboard').replace('#/', '');
   if (!TITLES[r]) r = 'dashboard';
   currentRoute = r;
   document.querySelectorAll('.nav a').forEach(a => a.classList.toggle('active', a.dataset.route === r));
   $('#pageTitle').textContent = TITLES[r];
-  const map = { dashboard: renderDashboard, recruitment: renderRecruitment, onboarding: renderOnboarding, talent: renderTalent, employees: renderEmployees, settings: renderSettings };
+  const map = { dashboard: renderDashboard, recruitment: renderRecruitment, onboarding: renderOnboarding, talent: renderTalent, jds: renderJDs, employees: renderEmployees, settings: renderSettings };
   map[r]();
 }
 
@@ -166,9 +166,10 @@ async function renderRecruitment(silent) {
       <td>${statusBadge(c)}</td>
       <td>${esc(c.owner_name || '未分配')}</td>
       <td>${esc(c.source || '—')}</td>
+      <td>${esc(c.jd_title || '—')}</td>
       <td>${c.notes_count ? c.notes_count + ' 条' : '—'}</td>
       <td class="row-actions">${actionBtns(c)}</td>
-    </tr>`).join('') : `<tr><td colspan="8" class="empty">没有候选人，点右上角「新增候选人」开始</td></tr>`;
+    </tr>`).join('') : `<tr><td colspan="9" class="empty">没有候选人，点右上角「新增候选人」开始</td></tr>`;
   view().innerHTML = `
     <div class="toolbar">
       <input class="grow" id="fQ" placeholder="搜索姓名 / 手机号 / 职位" value="${esc(recFilter.q)}">
@@ -177,7 +178,7 @@ async function renderRecruitment(silent) {
       <button class="btn btn-line" id="batchImport">批量导入简历</button>
     </div>
     <div class="toolbar" style="margin-top:-6px">${statusTabs}</div>
-    <table><thead><tr><th>姓名</th><th>应聘职位</th><th>阶段</th><th>状态</th><th>负责人</th><th>来源</th><th>团队备注</th><th>操作</th></tr></thead><tbody>${rows}</tbody></table>`;
+    <table><thead><tr><th>姓名</th><th>应聘职位</th><th>阶段</th><th>状态</th><th>负责人</th><th>来源</th><th>适配岗位</th><th>团队备注</th><th>操作</th></tr></thead><tbody>${rows}</tbody></table>`;
   $('#fQ').oninput = e => { recFilter.q = e.target.value; clearTimeout(e.target._t); e.target._t = setTimeout(() => renderRecruitment(true), 350); };
   $('#fStage').onchange = e => { recFilter.stage = e.target.value; renderRecruitment(true); };
   $('#addC').onclick = () => openCandidateForm(null);
@@ -245,6 +246,10 @@ function openCandidateForm(c) {
     <div class="row2">
       <div class="field"><label>应聘职位</label><input name="position" value="${v('position')}"></div>
       <div class="field"><label>招聘来源</label><select name="source">${SOURCES.map(s => `<option ${c && c.source === s ? 'selected' : ''}>${s}</option>`).join('')}</select></div>
+    </div>
+    <div class="row2">
+      <div class="field"><label>适配岗位（关联JD）</label><select name="jd_id" id="jdSel"><option value="">未关联</option></select></div>
+      <div class="field"><label>&nbsp;</label><span class="muted" style="font-size:12px;align-self:center">在「JD库」中创建后，可在此关联</span></div>
     </div>
     <div class="row2">
       <div class="field"><label>当前阶段</label><select name="stage">${STAGES.map((s, i) => `<option value="${i}" ${c && c.stage === i ? 'selected' : ''}>${s}</option>`).join('')}</select></div>
@@ -330,6 +335,21 @@ function openCandidateForm(c) {
     };
     loadNotes();
   }
+  // 适配岗位：从 JD 库加载选项（按总部/项目分组）
+  (async () => {
+    try {
+      const { jds } = await api('GET', '/api/jds');
+      const sel = $('#jdSel');
+      if (sel) {
+        const hq = jds.filter(j => j.category === '总部');
+        const proj = jds.filter(j => j.category === '项目');
+        const opt = (j) => `<option value="${j.id}" ${c && c.jd_id === j.id ? 'selected' : ''}>${esc(j.title)}</option>`;
+        sel.innerHTML = '<option value="">未关联</option>'
+          + (hq.length ? `<optgroup label="总部">${hq.map(opt).join('')}</optgroup>` : '')
+          + (proj.length ? `<optgroup label="项目">${proj.map(opt).join('')}</optgroup>` : '');
+      }
+    } catch (e) { /* ignore */ }
+  })();
   $('#saveC').onclick = async () => {
     const f = $('#modal').querySelectorAll('input,select,textarea');
     const body = {}; f.forEach(el => body[el.name] = el.value.trim());
@@ -346,6 +366,77 @@ function openCandidateForm(c) {
         await fetch(`/api/candidates/${saved.id}/attachment`, { method: 'POST', headers: { 'Authorization': 'Bearer ' + token }, body: fd });
       }
       closeModal(); toast('已保存'); renderRecruitment(true);
+    } catch (e) { toast(e.message); }
+  };
+}
+
+// ============ JD 库（总部 / 项目） ============
+async function renderJDs() {
+  const { jds } = await api('GET', '/api/jds');
+  const block = (cat) => {
+    const list = jds.filter(j => j.category === cat);
+    const items = list.length ? list.map(j => `
+      <div class="jd-card">
+        <div style="display:flex;justify-content:space-between;align-items:center;gap:8px">
+          <b>${esc(j.title)}</b>
+          <span class="muted" style="font-size:12px">${esc(j.created_by_name || '')} · ${fmtTime(j.created_at)}</span>
+        </div>
+        ${j.content ? `<div style="margin-top:6px;white-space:pre-wrap;line-height:1.5">${esc(j.content)}</div>` : ''}
+        <div style="margin-top:8px;display:flex;gap:12px;align-items:center">
+          ${j.attachment_name ? `<a href="javascript:void(0)" class="dlJd" data-id="${j.id}" style="color:#2563eb">📎 ${esc(j.attachment_name)}</a>` : ''}
+          ${(j.created_by === me.id || me.role === 'admin') ? `<a href="javascript:void(0)" class="delJd" data-id="${j.id}" style="color:#dc2626">删除</a>` : ''}
+        </div>
+      </div>`).join('') : '<div class="muted">暂无' + cat + 'JD</div>';
+    return `<div class="panel"><div class="section-title">${cat} JD</div>${items}</div>`;
+  };
+  view().innerHTML = `
+    <div class="toolbar">
+      <button class="btn" id="newJd">+ 新建JD</button>
+      <span class="muted" style="font-size:12px">JD 分为「总部」和「项目」两类，可撰写或上传附件，用于与候选人简历关联匹配</span>
+    </div>
+    <div class="grid cards2" style="margin-top:14px">${block('总部')}${block('项目')}</div>`;
+  $('#newJd').onclick = openJdForm;
+  view().querySelectorAll('.dlJd').forEach(a => a.onclick = () => downloadJd(a.dataset.id));
+  view().querySelectorAll('.delJd').forEach(a => a.onclick = async () => {
+    if (!confirm('确认删除该JD？')) return;
+    try { await api('DELETE', '/api/jds/' + a.dataset.id); toast('已删除'); renderJDs(); }
+    catch (e) { toast(e.message); }
+  });
+}
+function downloadJd(id) {
+  fetch('/api/jds/' + id + '/attachment', { headers: { 'Authorization': 'Bearer ' + token } })
+    .then(r => r.blob())
+    .then(b => { const u = URL.createObjectURL(b); const x = document.createElement('a'); x.href = u; x.download = 'JD'; x.click(); URL.revokeObjectURL(u); })
+    .catch(() => toast('下载失败'));
+}
+function openJdForm() {
+  openModal('新建JD', `
+    <div class="row2">
+      <div class="field"><label>JD标题 *</label><input id="jdTitle" placeholder="如：购物中心招商经理"></div>
+      <div class="field"><label>类别</label><select id="jdCat">
+        <option value="总部">总部</option>
+        <option value="项目">项目</option>
+      </select></div>
+    </div>
+    <div class="field"><label>JD内容（可直接撰写岗位职责、任职要求、薪资范围等）</label><textarea id="jdContent" style="min-height:140px" placeholder="岗位职责、任职要求、薪资范围等"></textarea></div>
+    <div class="field"><label>或上传JD文件（PDF / Word / TXT / 图片）</label><input type="file" id="jdFile" accept=".pdf,.docx,.txt,.jpg,.jpeg,.png"></div>
+    <div class="modal-actions"><button class="btn-ghost" onclick="closeModal()">取消</button><button class="btn" id="jdSave">保存</button></div>
+  `);
+  $('#jdSave').onclick = async () => {
+    const title = $('#jdTitle').value.trim();
+    const category = $('#jdCat').value;
+    if (!title) { toast('请填写JD标题'); return; }
+    const fd = new FormData();
+    fd.append('title', title);
+    fd.append('category', category);
+    fd.append('content', $('#jdContent').value);
+    const file = $('#jdFile').files[0];
+    if (file) fd.append('file', file);
+    try {
+      const resp = await fetch('/api/jds', { method: 'POST', headers: { 'Authorization': 'Bearer ' + token }, body: fd });
+      const d = await resp.json();
+      if (!resp.ok) { toast(d.error || '保存失败'); return; }
+      closeModal(); toast('JD已保存'); renderJDs();
     } catch (e) { toast(e.message); }
   };
 }
