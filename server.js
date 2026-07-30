@@ -266,16 +266,22 @@ const db = { prepare };
 async function initSchema() {
   if (usePg) {
     for (const s of PG_SCHEMA) await pgPool.query(s);
-    await pgPool.query(`CREATE INDEX IF NOT EXISTS idx_candidate_notes_cid ON candidate_notes(candidate_id)`);
-    await pgPool.query(`CREATE INDEX IF NOT EXISTS idx_candidates_updated ON candidates(updated_at)`);
-    await pgPool.query(`CREATE INDEX IF NOT EXISTS idx_candidates_jd ON candidates(jd_id)`);
   } else {
     sqliteDb.exec(SQLITE_SCHEMA);
+  }
+  // 必须先补列（老表可能缺 jd_id 等新列），再建索引，否则建索引会因列不存在而报错
+  await migrateCandidates();
+  if (usePg) {
+    try { await pgPool.query(`CREATE INDEX IF NOT EXISTS idx_candidate_notes_cid ON candidate_notes(candidate_id)`); } catch (e) { console.error('索引创建失败:', e.message); }
+    try { await pgPool.query(`CREATE INDEX IF NOT EXISTS idx_candidates_updated ON candidates(updated_at)`); } catch (e) { console.error('索引创建失败:', e.message); }
+    try { await pgPool.query(`CREATE INDEX IF NOT EXISTS idx_candidates_jd ON candidates(jd_id)`); } catch (e) { console.error('索引创建失败:', e.message); }
+    try { await pgPool.query(`CREATE INDEX IF NOT EXISTS idx_jds_category ON jds(category)`); } catch (e) { console.error('索引创建失败:', e.message); }
+  } else {
     try { sqliteDb.exec('CREATE INDEX IF NOT EXISTS idx_candidate_notes_cid ON candidate_notes(candidate_id)'); } catch {}
     try { sqliteDb.exec('CREATE INDEX IF NOT EXISTS idx_candidates_updated ON candidates(updated_at)'); } catch {}
     try { sqliteDb.exec('CREATE INDEX IF NOT EXISTS idx_candidates_jd ON candidates(jd_id)'); } catch {}
+    try { sqliteDb.exec('CREATE INDEX IF NOT EXISTS idx_jds_category ON jds(category)'); } catch {}
   }
-  await migrateCandidates();
 }
 
 // 给已存在的 candidates 表补加「履历 / 附件」等新列（CREATE TABLE IF NOT EXISTS 不会改已有表）
