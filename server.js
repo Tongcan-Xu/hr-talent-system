@@ -122,6 +122,25 @@ CREATE TABLE IF NOT EXISTS jds (
   created_by_name TEXT,
   created_at TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS positions (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  name TEXT NOT NULL,
+  category TEXT,
+  dept TEXT,
+  headcount INTEGER DEFAULT 1,
+  jd_id INTEGER,
+  owner_id INTEGER,
+  owner_name TEXT,
+  start_date TEXT,
+  offer_date TEXT,
+  onboard_date TEXT,
+  status TEXT NOT NULL DEFAULT 'open',
+  remark TEXT,
+  created_by INTEGER,
+  created_by_name TEXT,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
 `;
 
 const PG_SCHEMA = [
@@ -208,6 +227,25 @@ const PG_SCHEMA = [
     created_by INTEGER,
     created_by_name TEXT,
     created_at TEXT NOT NULL
+  )`,
+  `CREATE TABLE IF NOT EXISTS positions (
+    id SERIAL PRIMARY KEY,
+    name TEXT NOT NULL,
+    category TEXT,
+    dept TEXT,
+    headcount INTEGER DEFAULT 1,
+    jd_id INTEGER,
+    owner_id INTEGER,
+    owner_name TEXT,
+    start_date TEXT,
+    offer_date TEXT,
+    onboard_date TEXT,
+    status TEXT NOT NULL DEFAULT 'open',
+    remark TEXT,
+    created_by INTEGER,
+    created_by_name TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
   )`
 ];
 
@@ -232,7 +270,7 @@ function verifyPassword(pw, stored) {
 }
 
 // ---------- DB 抽象层（SQLite / Postgres 统一接口）----------
-const ID_TABLES = new Set(['users', 'candidates', 'onboarding', 'activities', 'candidate_notes', 'jds']);
+const ID_TABLES = new Set(['users', 'candidates', 'onboarding', 'activities', 'candidate_notes', 'jds', 'positions']);
 function toPgSql(sql) {
   let i = 0;
   return sql.replace(/\?/g, () => '$' + (++i));
@@ -276,11 +314,15 @@ async function initSchema() {
     try { await pgPool.query(`CREATE INDEX IF NOT EXISTS idx_candidates_updated ON candidates(updated_at)`); } catch (e) { console.error('索引创建失败:', e.message); }
     try { await pgPool.query(`CREATE INDEX IF NOT EXISTS idx_candidates_jd ON candidates(jd_id)`); } catch (e) { console.error('索引创建失败:', e.message); }
     try { await pgPool.query(`CREATE INDEX IF NOT EXISTS idx_jds_category ON jds(category)`); } catch (e) { console.error('索引创建失败:', e.message); }
+    try { await pgPool.query(`CREATE INDEX IF NOT EXISTS idx_candidates_position ON candidates(position_id)`); } catch (e) { console.error('索引创建失败:', e.message); }
+    try { await pgPool.query(`CREATE INDEX IF NOT EXISTS idx_positions_status ON positions(status)`); } catch (e) { console.error('索引创建失败:', e.message); }
   } else {
     try { sqliteDb.exec('CREATE INDEX IF NOT EXISTS idx_candidate_notes_cid ON candidate_notes(candidate_id)'); } catch {}
     try { sqliteDb.exec('CREATE INDEX IF NOT EXISTS idx_candidates_updated ON candidates(updated_at)'); } catch {}
     try { sqliteDb.exec('CREATE INDEX IF NOT EXISTS idx_candidates_jd ON candidates(jd_id)'); } catch {}
     try { sqliteDb.exec('CREATE INDEX IF NOT EXISTS idx_jds_category ON jds(category)'); } catch {}
+    try { sqliteDb.exec('CREATE INDEX IF NOT EXISTS idx_candidates_position ON candidates(position_id)'); } catch {}
+    try { sqliteDb.exec('CREATE INDEX IF NOT EXISTS idx_positions_status ON positions(status)'); } catch {}
   }
 }
 
@@ -292,6 +334,7 @@ async function migrateCandidates() {
       await pgPool.query(`ALTER TABLE candidates ADD COLUMN IF NOT EXISTS ${col} TEXT`);
     }
     await pgPool.query(`ALTER TABLE candidates ADD COLUMN IF NOT EXISTS jd_id INTEGER`);
+    await pgPool.query(`ALTER TABLE candidates ADD COLUMN IF NOT EXISTS position_id INTEGER`);
   } else {
     const existing = sqliteDb.prepare('PRAGMA table_info(candidates)').all().map((r) => r.name);
     for (const col of cols) {
@@ -302,6 +345,10 @@ async function migrateCandidates() {
     }
     if (!existing.includes('jd_id')) {
       try { sqliteDb.exec(`ALTER TABLE candidates ADD COLUMN jd_id INTEGER`); }
+      catch (e) { if (!/duplicate column/i.test(e.message)) throw e; }
+    }
+    if (!existing.includes('position_id')) {
+      try { sqliteDb.exec(`ALTER TABLE candidates ADD COLUMN position_id INTEGER`); }
       catch (e) { if (!/duplicate column/i.test(e.message)) throw e; }
     }
   }
@@ -399,7 +446,7 @@ async function importResumeFile(buf, ext, originalname, mimetype, user) {
 const STAGES = ['简历筛选', '初试', '复试', '终面', 'Offer', '入职'];
 
 // 候选人查询统一列（故意排除 attachment_data 这个大字段，避免列表/详情把 base64 全量传回前端）
-const CAND_COLS = 'id,name,gender,phone,email,position,source,stage,status,owner_id,owner_name,expected_salary,current_org,education,school,interview_note,notes,resume_text,attachment_name,attachment_type,tags,expected_onboard_date,hired_at,created_at,updated_at,jd_id';
+const CAND_COLS = 'id,name,gender,phone,email,position,source,stage,status,owner_id,owner_name,expected_salary,current_org,education,school,interview_note,notes,resume_text,attachment_name,attachment_type,tags,expected_onboard_date,hired_at,created_at,updated_at,jd_id,position_id';
 
 // ---------- Router ----------
 const server = http.createServer(async (req, res) => {
@@ -501,8 +548,10 @@ const server = http.createServer(async (req, res) => {
       if (owner) { clauses.push('owner_id = ?'); params.push(Number(owner)); }
       const search = q.get('q');
       if (search) { clauses.push('(name LIKE ? OR phone LIKE ? OR position LIKE ?)'); const s = '%' + search + '%'; params.push(s, s, s); }
+      const posId = q.get('position_id');
+      if (posId) { clauses.push('position_id = ?'); params.push(Number(posId)); }
       const where = clauses.length ? 'WHERE ' + clauses.join(' AND ') : '';
-      const rows = await db.prepare(`SELECT ${CAND_COLS}, (SELECT COUNT(*) FROM candidate_notes WHERE candidate_notes.candidate_id = candidates.id) AS notes_count, (SELECT title FROM jds WHERE jds.id = candidates.jd_id) AS jd_title FROM candidates ${where} ORDER BY updated_at DESC`).all(...params);
+      const rows = await db.prepare(`SELECT ${CAND_COLS}, (SELECT COUNT(*) FROM candidate_notes WHERE candidate_notes.candidate_id = candidates.id) AS notes_count, (SELECT title FROM jds WHERE jds.id = candidates.jd_id) AS jd_title, (SELECT name FROM positions WHERE positions.id = candidates.position_id) AS position_name FROM candidates ${where} ORDER BY updated_at DESC`).all(...params);
       return sendJSON(res, 200, { candidates: rows, stages: STAGES });
     }
 
@@ -512,11 +561,11 @@ const server = http.createServer(async (req, res) => {
       if (!b.name) return sendJSON(res, 400, { error: '请填写候选人姓名' });
       const stage = (b.stage !== undefined && b.stage !== '') ? Number(b.stage) : 0;
       const info = await db.prepare(`INSERT INTO candidates
-        (name, gender, phone, email, position, source, stage, status, owner_id, owner_name, expected_salary, current_org, school, education, interview_note, notes, resume_text, tags, expected_onboard_date, jd_id, created_at, updated_at)
-        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`)
+        (name, gender, phone, email, position, source, stage, status, owner_id, owner_name, expected_salary, current_org, school, education, interview_note, notes, resume_text, tags, expected_onboard_date, jd_id, position_id, created_at, updated_at)
+        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`)
         .run(b.name, b.gender || '', b.phone || '', b.email || '', b.position || '', b.source || '',
           stage, 'active', user.id, user.name, b.expected_salary || '', b.current_org || '', b.school || '', b.education || '',
-          b.interview_note || '', b.notes || '', b.resume_text || '', b.tags || '', b.expected_onboard_date || '', b.jd_id || null, now(), now());
+          b.interview_note || '', b.notes || '', b.resume_text || '', b.tags || '', b.expected_onboard_date || '', b.jd_id || null, b.position_id || null, now(), now());
       const cand = await db.prepare('SELECT * FROM candidates WHERE id = ?').get(Number(info.lastInsertRowid));
       await logActivity(user, '新增候选人', cand, `添加候选人 ${cand.name}（${STAGES[stage]}）`);
       return sendJSON(res, 200, { candidate: cand });
@@ -542,7 +591,7 @@ const server = http.createServer(async (req, res) => {
     if (m) {
       const id = Number(m[1]);
       if (req.method === 'GET') {
-        const c = await db.prepare(`SELECT ${CAND_COLS}, (SELECT title FROM jds WHERE jds.id = candidates.jd_id) AS jd_title FROM candidates WHERE id = ?`).get(id);
+        const c = await db.prepare(`SELECT ${CAND_COLS}, (SELECT title FROM jds WHERE jds.id = candidates.jd_id) AS jd_title, (SELECT name FROM positions WHERE positions.id = candidates.position_id) AS position_name FROM candidates WHERE id = ?`).get(id);
         if (!c) return sendJSON(res, 404, { error: '未找到' });
         return sendJSON(res, 200, { candidate: c });
       }
@@ -561,10 +610,11 @@ const server = http.createServer(async (req, res) => {
           interview_note: b.interview_note ?? c.interview_note,
           notes: b.notes ?? c.notes, resume_text: b.resume_text ?? c.resume_text,
           tags: b.tags ?? c.tags, expected_onboard_date: b.expected_onboard_date ?? c.expected_onboard_date,
-          jd_id: (b.jd_id !== undefined) ? (b.jd_id || null) : c.jd_id
+          jd_id: (b.jd_id !== undefined) ? (b.jd_id || null) : c.jd_id,
+          position_id: (b.position_id !== undefined) ? (b.position_id || null) : c.position_id
         };
-        await db.prepare(`UPDATE candidates SET name=?,gender=?,phone=?,email=?,position=?,source=?,stage=?,owner_id=?,owner_name=?,expected_salary=?,current_org=?,school=?,education=?,interview_note=?,notes=?,resume_text=?,tags=?,expected_onboard_date=?,jd_id=?,updated_at=? WHERE id=?`)
-          .run(upd.name, upd.gender, upd.phone, upd.email, upd.position, upd.source, upd.stage, upd.owner_id, upd.owner_name, upd.expected_salary, upd.current_org, upd.school, upd.education, upd.interview_note, upd.notes, upd.resume_text, upd.tags, upd.expected_onboard_date, upd.jd_id, now(), id);
+        await db.prepare(`UPDATE candidates SET name=?,gender=?,phone=?,email=?,position=?,source=?,stage=?,owner_id=?,owner_name=?,expected_salary=?,current_org=?,school=?,education=?,interview_note=?,notes=?,resume_text=?,tags=?,expected_onboard_date=?,jd_id=?,position_id=?,updated_at=? WHERE id=?`)
+          .run(upd.name, upd.gender, upd.phone, upd.email, upd.position, upd.source, upd.stage, upd.owner_id, upd.owner_name, upd.expected_salary, upd.current_org, upd.school, upd.education, upd.interview_note, upd.notes, upd.resume_text, upd.tags, upd.expected_onboard_date, upd.jd_id, upd.position_id, now(), id);
         const nc = await db.prepare('SELECT * FROM candidates WHERE id = ?').get(id);
         await logActivity(user, '更新候选人', nc, `更新 ${nc.name} 的资料`);
         return sendJSON(res, 200, { candidate: nc });
@@ -655,13 +705,130 @@ const server = http.createServer(async (req, res) => {
       return res.end(buf);
     }
     const mJd = pathname.match(/^\/api\/jds\/(\d+)$/);
+    // JD 详情：正文全文 + 关联的在招岗位 + 关联的候选人
+    if (mJd && req.method === 'GET') {
+      const id = Number(mJd[1]);
+      const jd = await db.prepare('SELECT id, category, title, content, attachment_name, attachment_type, created_by, created_by_name, created_at FROM jds WHERE id = ?').get(id);
+      if (!jd) return sendJSON(res, 404, { error: 'JD不存在' });
+      const positions = await db.prepare('SELECT id, name, status, start_date, offer_date, onboard_date FROM positions WHERE jd_id = ? ORDER BY created_at DESC').all(id);
+      const candidates = await db.prepare('SELECT id, name, stage, status, owner_name FROM candidates WHERE jd_id = ? ORDER BY updated_at DESC').all(id);
+      return sendJSON(res, 200, { jd, positions, candidates });
+    }
+    if (mJd && req.method === 'PUT') {
+      const id = Number(mJd[1]);
+      const jd = await db.prepare('SELECT * FROM jds WHERE id = ?').get(id);
+      if (!jd) return sendJSON(res, 404, { error: 'JD不存在' });
+      if (jd.created_by !== user.id && user.role !== 'admin') return sendJSON(res, 403, { error: '只能编辑自己创建的JD' });
+      const b = await readBody(req);
+      const title = (b.title !== undefined ? String(b.title).trim() : jd.title) || jd.title;
+      const category = ['总部', '项目'].includes(b.category) ? b.category : jd.category;
+      const content = (b.content !== undefined) ? String(b.content) : jd.content;
+      await db.prepare('UPDATE jds SET title=?, category=?, content=? WHERE id=?').run(title, category, content, id);
+      const nj = await db.prepare('SELECT id, category, title, content, attachment_name, created_by, created_by_name, created_at FROM jds WHERE id = ?').get(id);
+      return sendJSON(res, 200, { jd: nj });
+    }
     if (mJd && req.method === 'DELETE') {
       const id = Number(mJd[1]);
       const jd = await db.prepare('SELECT * FROM jds WHERE id = ?').get(id);
       if (!jd) return sendJSON(res, 404, { error: 'JD不存在' });
       if (jd.created_by !== user.id && user.role !== 'admin') return sendJSON(res, 403, { error: '只能删除自己创建的JD' });
       await db.prepare('DELETE FROM jds WHERE id = ?').run(id);
+      // 解除关联，避免候选人/岗位挂着已删除的 JD
+      try { await db.prepare('UPDATE candidates SET jd_id = NULL WHERE jd_id = ?').run(id); } catch {}
+      try { await db.prepare('UPDATE positions SET jd_id = NULL WHERE jd_id = ?').run(id); } catch {}
       return sendJSON(res, 200, { ok: true });
+    }
+
+    // ---- 在招岗位（可关联 JD 与候选人）----
+    const POS_STATUS = ['open', 'paused', 'closed'];
+    if (pathname === '/api/positions' && req.method === 'GET') {
+      const status = q.get('status');
+      const base = `SELECT p.*, (SELECT title FROM jds WHERE jds.id = p.jd_id) AS jd_title,
+        (SELECT COUNT(*) FROM candidates c WHERE c.position_id = p.id) AS cand_count,
+        (SELECT COUNT(*) FROM candidates c WHERE c.position_id = p.id AND c.status = 'hired') AS hired_count
+        FROM positions p`;
+      const rows = status
+        ? await db.prepare(`${base} WHERE p.status = ? ORDER BY p.created_at DESC`).all(status)
+        : await db.prepare(`${base} ORDER BY p.created_at DESC`).all();
+      return sendJSON(res, 200, { positions: rows });
+    }
+    if (pathname === '/api/positions' && req.method === 'POST') {
+      const b = await readBody(req);
+      const name = (b.name || '').trim();
+      if (!name) return sendJSON(res, 400, { error: '请填写岗位名称' });
+      const status = POS_STATUS.includes(b.status) ? b.status : 'open';
+      const ownerId = b.owner_id ? Number(b.owner_id) : null;
+      const ownerRow = ownerId ? await db.prepare('SELECT name FROM users WHERE id = ?').get(ownerId) : null;
+      const info = await db.prepare(`INSERT INTO positions
+        (name, category, dept, headcount, jd_id, owner_id, owner_name, start_date, offer_date, onboard_date, status, remark, created_by, created_by_name, created_at, updated_at)
+        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`)
+        .run(name, b.category || '总部', b.dept || '', b.headcount ? Number(b.headcount) : 1, b.jd_id ? Number(b.jd_id) : null,
+          ownerId, ownerRow ? ownerRow.name : '', b.start_date || '', b.offer_date || '', b.onboard_date || '',
+          status, b.remark || '', user.id, user.name, now(), now());
+      const p = await db.prepare('SELECT * FROM positions WHERE id = ?').get(Number(info.lastInsertRowid));
+      await logActivity(user, '新增在招岗位', null, `新增岗位 ${name}`);
+      return sendJSON(res, 200, { position: p });
+    }
+    const mPos = pathname.match(/^\/api\/positions\/(\d+)$/);
+    if (mPos) {
+      const id = Number(mPos[1]);
+      if (req.method === 'GET') {
+        const p = await db.prepare(`SELECT p.*, (SELECT title FROM jds WHERE jds.id = p.jd_id) AS jd_title FROM positions p WHERE p.id = ?`).get(id);
+        if (!p) return sendJSON(res, 404, { error: '岗位不存在' });
+        const candidates = await db.prepare(`SELECT id, name, phone, stage, status, owner_name, source, updated_at FROM candidates WHERE position_id = ? ORDER BY updated_at DESC`).all(id);
+        return sendJSON(res, 200, { position: p, candidates });
+      }
+      if (req.method === 'PUT') {
+        const p = await db.prepare('SELECT * FROM positions WHERE id = ?').get(id);
+        if (!p) return sendJSON(res, 404, { error: '岗位不存在' });
+        const b = await readBody(req);
+        const ownerId = (b.owner_id !== undefined) ? (b.owner_id ? Number(b.owner_id) : null) : p.owner_id;
+        const ownerRow = ownerId ? await db.prepare('SELECT name FROM users WHERE id = ?').get(ownerId) : null;
+        const upd = {
+          name: (b.name !== undefined && String(b.name).trim()) ? String(b.name).trim() : p.name,
+          category: b.category ?? p.category,
+          dept: b.dept ?? p.dept,
+          headcount: (b.headcount !== undefined && b.headcount !== '') ? Number(b.headcount) : p.headcount,
+          jd_id: (b.jd_id !== undefined) ? (b.jd_id ? Number(b.jd_id) : null) : p.jd_id,
+          owner_id: ownerId,
+          owner_name: ownerRow ? ownerRow.name : (ownerId ? p.owner_name : ''),
+          start_date: b.start_date ?? p.start_date,
+          offer_date: b.offer_date ?? p.offer_date,
+          onboard_date: b.onboard_date ?? p.onboard_date,
+          status: POS_STATUS.includes(b.status) ? b.status : p.status,
+          remark: b.remark ?? p.remark
+        };
+        await db.prepare(`UPDATE positions SET name=?,category=?,dept=?,headcount=?,jd_id=?,owner_id=?,owner_name=?,start_date=?,offer_date=?,onboard_date=?,status=?,remark=?,updated_at=? WHERE id=?`)
+          .run(upd.name, upd.category, upd.dept, upd.headcount, upd.jd_id, upd.owner_id, upd.owner_name, upd.start_date, upd.offer_date, upd.onboard_date, upd.status, upd.remark, now(), id);
+        const np = await db.prepare('SELECT * FROM positions WHERE id = ?').get(id);
+        await logActivity(user, '更新在招岗位', null, `更新岗位 ${np.name}`);
+        return sendJSON(res, 200, { position: np });
+      }
+      if (req.method === 'DELETE') {
+        const p = await db.prepare('SELECT * FROM positions WHERE id = ?').get(id);
+        if (!p) return sendJSON(res, 404, { error: '岗位不存在' });
+        if (p.created_by !== user.id && user.role !== 'admin') return sendJSON(res, 403, { error: '只能删除自己创建的岗位' });
+        await db.prepare('DELETE FROM positions WHERE id = ?').run(id);
+        try { await db.prepare('UPDATE candidates SET position_id = NULL WHERE position_id = ?').run(id); } catch {}
+        await logActivity(user, '删除在招岗位', null, `删除岗位 ${p.name}`);
+        return sendJSON(res, 200, { ok: true });
+      }
+      return sendJSON(res, 405, { error: '方法不支持' });
+    }
+    // 岗位批量关联/解绑候选人
+    const mPosCand = pathname.match(/^\/api\/positions\/(\d+)\/candidates$/);
+    if (mPosCand && req.method === 'POST') {
+      const id = Number(mPosCand[1]);
+      const p = await db.prepare('SELECT * FROM positions WHERE id = ?').get(id);
+      if (!p) return sendJSON(res, 404, { error: '岗位不存在' });
+      const b = await readBody(req);
+      const ids = Array.isArray(b.candidate_ids) ? b.candidate_ids.map(Number).filter(Boolean) : [];
+      const detach = !!b.detach;
+      for (const cid of ids) {
+        await db.prepare('UPDATE candidates SET position_id = ?, updated_at = ? WHERE id = ?').run(detach ? null : id, now(), cid);
+      }
+      await logActivity(user, detach ? '岗位解绑候选人' : '岗位关联候选人', null, `${p.name} · ${ids.length} 人`);
+      return sendJSON(res, 200, { ok: true, count: ids.length });
     }
 
     // ---- 候选人简历附件：上传 / 下载 ----
@@ -841,10 +1008,17 @@ const server = http.createServer(async (req, res) => {
       const newThisMonth = all.filter(c => c.created_at >= startMonth).length;
       const totalDecided = hired.length + rejected.length;
       const hireRate = totalDecided ? Math.round((hired.length / totalDecided) * 100) : 0;
+      let openPositions = 0, openHeadcount = 0;
+      try {
+        const ps = await db.prepare(`SELECT status, headcount FROM positions`).all();
+        const opens = ps.filter(p => p.status === 'open');
+        openPositions = opens.length;
+        openHeadcount = opens.reduce((s, p) => s + (Number(p.headcount) || 0), 0);
+      } catch { /* 老库尚未建表时忽略 */ }
       return sendJSON(res, 200, {
         stats: {
           active: active.length, pool: pool.length, hired: hired.length, rejected: rejected.length,
-          total: all.length, newThisMonth, hireRate, funnel, sourceArr
+          total: all.length, newThisMonth, hireRate, funnel, sourceArr, openPositions, openHeadcount
         }
       });
     }

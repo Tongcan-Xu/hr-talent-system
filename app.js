@@ -4,6 +4,8 @@ const STAGES = ['简历筛选', '初试', '复试', '终面', 'Offer', '入职']
 const SOURCES = ['内推', '猎头', '官网', '猎聘', '智联', 'Boss', '校园招聘', '其他'];
 const EDU = ['大专', '本科', '硕士', '博士', '其他'];
 const STATUS_LABEL = { active: '招聘中', in_pool: '人才库', hired: '已入职', rejected: '已淘汰' };
+const POS_STATUS_LABEL = { open: '招聘中', paused: '暂停', closed: '已关闭' };
+const POS_STATUS_CLS = { open: 'b-active', paused: 'b-pool', closed: 'b-rejected' };
 
 let token = localStorage.getItem('hr_token');
 let me = null, companyKey = '', users = [];
@@ -112,14 +114,14 @@ async function startApp() {
 function bindNav() {
   document.querySelectorAll('.nav a').forEach(a => a.onclick = () => { location.hash = a.getAttribute('href'); });
 }
-const TITLES = { dashboard: '数据看板', recruitment: '招聘流程', onboarding: '入职办理', talent: '人才库', jds: 'JD库', employees: '员工管理', settings: '系统设置' };
+const TITLES = { dashboard: '数据看板', positions: '在招岗位', recruitment: '招聘流程', onboarding: '入职办理', talent: '人才库', jds: 'JD库', employees: '员工管理', settings: '系统设置' };
 function route(silent) {
   let r = (location.hash || '#/dashboard').replace('#/', '');
   if (!TITLES[r]) r = 'dashboard';
   currentRoute = r;
   document.querySelectorAll('.nav a').forEach(a => a.classList.toggle('active', a.dataset.route === r));
   $('#pageTitle').textContent = TITLES[r];
-  const map = { dashboard: renderDashboard, recruitment: renderRecruitment, onboarding: renderOnboarding, talent: renderTalent, jds: renderJDs, employees: renderEmployees, settings: renderSettings };
+  const map = { dashboard: renderDashboard, positions: renderPositions, recruitment: renderRecruitment, onboarding: renderOnboarding, talent: renderTalent, jds: renderJDs, employees: renderEmployees, settings: renderSettings };
   map[r]();
 }
 
@@ -133,10 +135,10 @@ async function renderDashboard() {
   const feed = activities.length ? activities.map(a => `<li><div>${esc(a.user_name)} · ${esc(a.action)} · <b>${esc(a.candidate_name || '')}</b></div><div class="t">${fmtTime(a.created_at)} ${esc(a.detail || '')}</div></li>`).join('') : '<div class="empty">暂无动态</div>';
   view().innerHTML = `
     <div class="grid cards4">
-      <div class="stat"><div class="num">${stats.active}</div><div class="lbl">招聘中</div><div class="bar" style="background:var(--primary)"></div></div>
+      <div class="stat clickable" id="cardPos"><div class="num">${stats.openPositions || 0}</div><div class="lbl">在招岗位${stats.openHeadcount ? `（需 ${stats.openHeadcount} 人）` : ''}</div><div class="bar" style="background:var(--purple)"></div></div>
+      <div class="stat"><div class="num">${stats.active}</div><div class="lbl">招聘中候选人</div><div class="bar" style="background:var(--primary)"></div></div>
       <div class="stat"><div class="num">${stats.hired}</div><div class="lbl">已入职</div><div class="bar" style="background:var(--green)"></div></div>
-      <div class="stat"><div class="num">${stats.pool}</div><div class="lbl">人才库</div><div class="bar" style="background:var(--amber)"></div></div>
-      <div class="stat"><div class="num">${stats.hireRate}%</div><div class="lbl">录用率</div><div class="bar" style="background:var(--purple)"></div></div>
+      <div class="stat"><div class="num">${stats.hireRate}%</div><div class="lbl">录用率 · 人才库 ${stats.pool}</div><div class="bar" style="background:var(--amber)"></div></div>
     </div>
     <div class="grid cards2" style="margin-top:16px">
       <div class="panel"><div class="section-title">招聘漏斗（各环节人数）</div>${funnel}
@@ -145,6 +147,7 @@ async function renderDashboard() {
       <div class="panel"><div class="section-title">最近动态</div><ul class="feed">${feed}</ul></div>
     </div>
     <div class="panel" style="margin-top:16px"><div class="section-title">招聘渠道分布</div>${source}</div>`;
+  if ($('#cardPos')) $('#cardPos').onclick = () => { location.hash = '#/positions'; };
 }
 
 // ============ 招聘流程 ============
@@ -166,7 +169,7 @@ async function renderRecruitment(silent) {
       <td>${statusBadge(c)}</td>
       <td>${esc(c.owner_name || '未分配')}</td>
       <td>${esc(c.source || '—')}</td>
-      <td>${esc(c.jd_title || '—')}</td>
+      <td>${c.position_name ? `<b>${esc(c.position_name)}</b>` : '<span class="muted">未归属</span>'}${c.jd_title ? `<div class="muted" style="font-size:12px">JD：${esc(c.jd_title)}</div>` : ''}</td>
       <td>${c.notes_count ? c.notes_count + ' 条' : '—'}</td>
       <td class="row-actions">${actionBtns(c)}</td>
     </tr>`).join('') : `<tr><td colspan="9" class="empty">没有候选人，点右上角「新增候选人」开始</td></tr>`;
@@ -178,7 +181,7 @@ async function renderRecruitment(silent) {
       <button class="btn btn-line" id="batchImport">批量导入简历</button>
     </div>
     <div class="toolbar" style="margin-top:-6px">${statusTabs}</div>
-    <table><thead><tr><th>姓名</th><th>应聘职位</th><th>阶段</th><th>状态</th><th>负责人</th><th>来源</th><th>适配岗位</th><th>团队备注</th><th>操作</th></tr></thead><tbody>${rows}</tbody></table>`;
+    <table><thead><tr><th>姓名</th><th>应聘职位</th><th>阶段</th><th>状态</th><th>负责人</th><th>来源</th><th>在招岗位 / JD</th><th>团队备注</th><th>操作</th></tr></thead><tbody>${rows}</tbody></table>`;
   $('#fQ').oninput = e => { recFilter.q = e.target.value; clearTimeout(e.target._t); e.target._t = setTimeout(() => renderRecruitment(true), 350); };
   $('#fStage').onchange = e => { recFilter.stage = e.target.value; renderRecruitment(true); };
   $('#addC').onclick = () => openCandidateForm(null);
@@ -248,9 +251,10 @@ function openCandidateForm(c) {
       <div class="field"><label>招聘来源</label><select name="source">${SOURCES.map(s => `<option ${c && c.source === s ? 'selected' : ''}>${s}</option>`).join('')}</select></div>
     </div>
     <div class="row2">
+      <div class="field"><label>在招岗位</label><select name="position_id" id="posSel"><option value="">未关联</option></select></div>
       <div class="field"><label>适配岗位（关联JD）</label><select name="jd_id" id="jdSel"><option value="">未关联</option></select></div>
-      <div class="field"><label>&nbsp;</label><span class="muted" style="font-size:12px;align-self:center">在「JD库」中创建后，可在此关联</span></div>
     </div>
+    <div class="muted" style="font-size:12px;margin:-6px 0 10px">选择「在招岗位」后会自动带出该岗位关联的 JD，也可手动改。</div>
     <div class="row2">
       <div class="field"><label>当前阶段</label><select name="stage">${STAGES.map((s, i) => `<option value="${i}" ${c && c.stage === i ? 'selected' : ''}>${s}</option>`).join('')}</select></div>
       <div class="field"><label>负责人</label>${ownerSelect(c ? c.owner_id : me.id)}</div>
@@ -335,7 +339,7 @@ function openCandidateForm(c) {
     };
     loadNotes();
   }
-  // 适配岗位：从 JD 库加载选项（按总部/项目分组）
+  // 适配岗位（JD库） + 在招岗位：加载下拉选项
   (async () => {
     try {
       const { jds } = await api('GET', '/api/jds');
@@ -347,6 +351,23 @@ function openCandidateForm(c) {
         sel.innerHTML = '<option value="">未关联</option>'
           + (hq.length ? `<optgroup label="总部">${hq.map(opt).join('')}</optgroup>` : '')
           + (proj.length ? `<optgroup label="项目">${proj.map(opt).join('')}</optgroup>` : '');
+      }
+    } catch (e) { /* ignore */ }
+    try {
+      const { positions } = await api('GET', '/api/positions');
+      const ps = $('#posSel');
+      if (ps) {
+        const opens = positions.filter(p => p.status === 'open');
+        const others = positions.filter(p => p.status !== 'open');
+        const opt = (p) => `<option value="${p.id}" data-jd="${p.jd_id || ''}" ${c && String(c.position_id) === String(p.id) ? 'selected' : ''}>${esc(p.name)}${p.dept ? '（' + esc(p.dept) + '）' : ''}</option>`;
+        ps.innerHTML = '<option value="">未关联</option>'
+          + (opens.length ? `<optgroup label="招聘中">${opens.map(opt).join('')}</optgroup>` : '')
+          + (others.length ? `<optgroup label="暂停 / 已关闭">${others.map(opt).join('')}</optgroup>` : '');
+        ps.onchange = () => {
+          const jdId = ps.selectedOptions[0] ? ps.selectedOptions[0].dataset.jd : '';
+          const js = $('#jdSel');
+          if (jdId && js && !js.value) js.value = jdId;
+        };
       }
     } catch (e) { /* ignore */ }
   })();
@@ -371,37 +392,71 @@ function openCandidateForm(c) {
 }
 
 // ============ JD 库（总部 / 项目） ============
+let jdQ = '';
 async function renderJDs() {
   const { jds } = await api('GET', '/api/jds');
+  const kw = jdQ.trim().toLowerCase();
+  const match = (j) => !kw || String(j.title || '').toLowerCase().includes(kw);
   const block = (cat) => {
-    const list = jds.filter(j => j.category === cat);
+    const list = jds.filter(j => j.category === cat && match(j));
     const items = list.length ? list.map(j => `
-      <div class="jd-card">
-        <div style="display:flex;justify-content:space-between;align-items:center;gap:8px">
-          <b>${esc(j.title)}</b>
-          <span class="muted" style="font-size:12px">${esc(j.created_by_name || '')} · ${fmtTime(j.created_at)}</span>
+      <div class="jd-row" data-jd="${j.id}">
+        <div class="jd-row-main">
+          <span class="jd-name">${esc(j.title)}</span>
+          ${j.attachment_name ? '<span class="jd-clip" title="含附件">📎</span>' : ''}
         </div>
-        ${j.content ? `<div style="margin-top:6px;white-space:pre-wrap;line-height:1.5">${esc(j.content)}</div>` : ''}
-        <div style="margin-top:8px;display:flex;gap:12px;align-items:center">
-          ${j.attachment_name ? `<a href="javascript:void(0)" class="dlJd" data-id="${j.id}" style="color:#2563eb">📎 ${esc(j.attachment_name)}</a>` : ''}
-          ${(j.created_by === me.id || me.role === 'admin') ? `<a href="javascript:void(0)" class="delJd" data-id="${j.id}" style="color:#dc2626">删除</a>` : ''}
-        </div>
-      </div>`).join('') : '<div class="muted">暂无' + cat + 'JD</div>';
-    return `<div class="panel"><div class="section-title">${cat} JD</div>${items}</div>`;
+        <span class="muted jd-row-meta">${esc(j.created_by_name || '')} · ${fmtTime(j.created_at)}</span>
+      </div>`).join('') : `<div class="muted" style="padding:10px 2px">暂无${cat}JD</div>`;
+    return `<div class="panel"><div class="section-title">${cat} JD <span class="muted" style="font-weight:400;font-size:12px">（${list.length}）</span></div>${items}</div>`;
   };
   view().innerHTML = `
     <div class="toolbar">
+      <input class="grow" id="jdQ" placeholder="搜索岗位名称" value="${esc(jdQ)}">
       <button class="btn" id="newJd">+ 新建JD</button>
-      <span class="muted" style="font-size:12px">JD 分为「总部」和「项目」两类，可撰写或上传附件，用于与候选人简历关联匹配</span>
     </div>
-    <div class="grid cards2" style="margin-top:14px">${block('总部')}${block('项目')}</div>`;
-  $('#newJd').onclick = openJdForm;
-  view().querySelectorAll('.dlJd').forEach(a => a.onclick = () => downloadJd(a.dataset.id));
-  view().querySelectorAll('.delJd').forEach(a => a.onclick = async () => {
-    if (!confirm('确认删除该JD？')) return;
-    try { await api('DELETE', '/api/jds/' + a.dataset.id); toast('已删除'); renderJDs(); }
+    <div class="muted" style="font-size:12px;margin:-4px 0 6px">列表只显示岗位名称，<b>点击任意一行</b>查看该 JD 的完整内容、附件与关联情况。</div>
+    <div class="grid cards2" style="margin-top:8px">${block('总部')}${block('项目')}</div>`;
+  $('#jdQ').oninput = e => { jdQ = e.target.value; clearTimeout(e.target._t); e.target._t = setTimeout(renderJDs, 300); };
+  $('#newJd').onclick = () => openJdForm(null);
+  view().querySelectorAll('[data-jd]').forEach(row => row.onclick = () => openJdDetail(row.dataset.jd));
+}
+
+// JD 详情弹窗：完整内容 + 附件 + 关联岗位/候选人 + 编辑/删除
+async function openJdDetail(id) {
+  let d;
+  try { d = await api('GET', '/api/jds/' + id); } catch (e) { return toast(e.message); }
+  const j = d.jd;
+  const canEdit = (j.created_by === me.id || me.role === 'admin');
+  const posList = (d.positions || []).length
+    ? (d.positions || []).map(p => `<li><b>${esc(p.name)}</b> <span class="muted" style="font-size:12px">${POS_STATUS_LABEL[p.status] || ''}${p.start_date ? ' · 开始 ' + esc(p.start_date) : ''}</span></li>`).join('')
+    : '<li class="muted">暂无在招岗位引用该 JD</li>';
+  const candList = (d.candidates || []).length
+    ? (d.candidates || []).map(c => `<li><b>${esc(c.name)}</b> <span class="muted" style="font-size:12px">${STAGES[c.stage] || ''} · ${STATUS_LABEL[c.status] || ''}${c.owner_name ? ' · ' + esc(c.owner_name) : ''}</span></li>`).join('')
+    : '<li class="muted">暂无候选人关联该 JD</li>';
+  openModal(esc(j.title), `
+    <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin:-6px 0 12px">
+      <span class="badge ${j.category === '总部' ? 'b-active' : 'b-hired'}">${esc(j.category)}</span>
+      <span class="muted" style="font-size:12px">创建：${esc(j.created_by_name || '—')} · ${fmtTime(j.created_at)}</span>
+      ${j.attachment_name ? `<a href="javascript:void(0)" id="jdDl" style="color:#2563eb;font-size:13px">📎 下载附件（${esc(j.attachment_name)}）</a>` : ''}
+    </div>
+    <div class="section-title" style="margin-top:0">岗位说明书正文</div>
+    <div class="jd-content">${j.content ? esc(j.content) : '<span class="muted">该 JD 未撰写正文' + (j.attachment_name ? '，内容在上方附件中' : '') + '</span>'}</div>
+    <div class="grid cards2" style="margin-top:14px;gap:12px">
+      <div><div class="section-title" style="margin-top:0">关联的在招岗位</div><ul class="feed">${posList}</ul></div>
+      <div><div class="section-title" style="margin-top:0">关联的候选人</div><ul class="feed">${candList}</ul></div>
+    </div>
+    <div class="modal-actions">
+      <button class="btn-ghost" onclick="closeModal()">关闭</button>
+      ${canEdit ? '<button class="btn-sm btn-red" id="jdDel">删除</button>' : ''}
+      ${canEdit ? '<button class="btn" id="jdEdit">编辑</button>' : ''}
+    </div>`, true);
+  if ($('#jdDl')) $('#jdDl').onclick = () => downloadJd(j.id);
+  if ($('#jdEdit')) $('#jdEdit').onclick = () => openJdForm(j);
+  if ($('#jdDel')) $('#jdDel').onclick = async () => {
+    if (!confirm(`确认删除 JD「${j.title}」？关联的候选人与岗位会自动解除关联。`)) return;
+    try { await api('DELETE', '/api/jds/' + j.id); closeModal(); toast('已删除'); renderJDs(); }
     catch (e) { toast(e.message); }
-  });
+  };
 }
 function downloadJd(id) {
   fetch('/api/jds/' + id + '/attachment', { headers: { 'Authorization': 'Bearer ' + token } })
@@ -409,35 +464,227 @@ function downloadJd(id) {
     .then(b => { const u = URL.createObjectURL(b); const x = document.createElement('a'); x.href = u; x.download = 'JD'; x.click(); URL.revokeObjectURL(u); })
     .catch(() => toast('下载失败'));
 }
-function openJdForm() {
-  openModal('新建JD', `
+function openJdForm(jd) {
+  const isEdit = !!(jd && jd.id);
+  openModal(isEdit ? '编辑JD' : '新建JD', `
     <div class="row2">
-      <div class="field"><label>JD标题 *</label><input id="jdTitle" placeholder="如：购物中心招商经理"></div>
+      <div class="field"><label>岗位名称 *</label><input id="jdTitle" placeholder="如：购物中心招商经理" value="${isEdit ? esc(jd.title) : ''}"></div>
       <div class="field"><label>类别</label><select id="jdCat">
-        <option value="总部">总部</option>
-        <option value="项目">项目</option>
+        <option value="总部" ${isEdit && jd.category === '总部' ? 'selected' : ''}>总部</option>
+        <option value="项目" ${isEdit && jd.category === '项目' ? 'selected' : ''}>项目</option>
       </select></div>
     </div>
-    <div class="field"><label>JD内容（可直接撰写岗位职责、任职要求、薪资范围等）</label><textarea id="jdContent" style="min-height:140px" placeholder="岗位职责、任职要求、薪资范围等"></textarea></div>
-    <div class="field"><label>或上传JD文件（PDF / Word / TXT / 图片）</label><input type="file" id="jdFile" accept=".pdf,.docx,.txt,.jpg,.jpeg,.png"></div>
+    <div class="field"><label>JD内容（岗位职责、任职要求、薪资范围等）</label><textarea id="jdContent" style="min-height:180px" placeholder="岗位职责、任职要求、薪资范围等">${isEdit ? esc(jd.content || '') : ''}</textarea></div>
+    ${isEdit
+      ? `<div class="muted" style="font-size:12px">${jd.attachment_name ? '已存附件：<b>' + esc(jd.attachment_name) + '</b>（编辑正文不会影响附件）' : '该 JD 无附件'}</div>`
+      : '<div class="field"><label>或上传JD文件（PDF / Word / TXT / 图片）</label><input type="file" id="jdFile" accept=".pdf,.docx,.txt,.jpg,.jpeg,.png"></div>'}
     <div class="modal-actions"><button class="btn-ghost" onclick="closeModal()">取消</button><button class="btn" id="jdSave">保存</button></div>
   `);
   $('#jdSave').onclick = async () => {
     const title = $('#jdTitle').value.trim();
     const category = $('#jdCat').value;
-    if (!title) { toast('请填写JD标题'); return; }
-    const fd = new FormData();
-    fd.append('title', title);
-    fd.append('category', category);
-    fd.append('content', $('#jdContent').value);
-    const file = $('#jdFile').files[0];
-    if (file) fd.append('file', file);
+    if (!title) { toast('请填写岗位名称'); return; }
     try {
+      if (isEdit) {
+        await api('PUT', '/api/jds/' + jd.id, { title, category, content: $('#jdContent').value });
+        closeModal(); toast('JD已更新'); renderJDs();
+        return;
+      }
+      const fd = new FormData();
+      fd.append('title', title);
+      fd.append('category', category);
+      fd.append('content', $('#jdContent').value);
+      const file = $('#jdFile').files[0];
+      if (file) fd.append('file', file);
       const resp = await fetch('/api/jds', { method: 'POST', headers: { 'Authorization': 'Bearer ' + token }, body: fd });
       const d = await resp.json();
       if (!resp.ok) { toast(d.error || '保存失败'); return; }
       closeModal(); toast('JD已保存'); renderJDs();
     } catch (e) { toast(e.message); }
+  };
+}
+
+// ============ 在招岗位 ============
+let posFilter = { status: '', q: '' };
+async function renderPositions() {
+  const { positions } = await api('GET', '/api/positions');
+  const kw = posFilter.q.trim().toLowerCase();
+  const list = positions.filter(p =>
+    (!posFilter.status || p.status === posFilter.status) &&
+    (!kw || String(p.name || '').toLowerCase().includes(kw) || String(p.dept || '').toLowerCase().includes(kw))
+  );
+  const order = { open: 0, paused: 1, closed: 2 };
+  list.sort((a, b) => (order[a.status] ?? 9) - (order[b.status] ?? 9) || String(b.created_at).localeCompare(String(a.created_at)));
+  const dt = (s) => s ? esc(s) : '<span class="muted">—</span>';
+  const rows = list.length ? list.map(p => `
+    <tr class="clickable" data-pos="${p.id}">
+      <td><b>${esc(p.name)}</b>${p.dept ? `<div class="muted" style="font-size:12px">${esc(p.dept)}</div>` : ''}</td>
+      <td>${esc(p.category || '—')}</td>
+      <td>${p.headcount || 1} 人</td>
+      <td>${p.jd_title ? esc(p.jd_title) : '<span class="muted">未关联</span>'}</td>
+      <td>${dt(p.start_date)}</td>
+      <td>${dt(p.offer_date)}</td>
+      <td>${dt(p.onboard_date)}</td>
+      <td>${Number(p.cand_count) || 0} 人${Number(p.hired_count) ? ` <span class="muted">/ 到岗 ${p.hired_count}</span>` : ''}</td>
+      <td><span class="badge ${POS_STATUS_CLS[p.status] || ''}">${POS_STATUS_LABEL[p.status] || p.status}</span></td>
+      <td>${esc(p.owner_name || '未分配')}</td>
+      <td class="row-actions">
+        <button class="btn-sm btn-line" data-pact="edit" data-id="${p.id}">编辑</button>
+        <button class="btn-sm btn-red" data-pact="del" data-id="${p.id}">删除</button>
+      </td>
+    </tr>`).join('') : `<tr><td colspan="11" class="empty">还没有在招岗位，点右上角「+ 新增岗位」开始</td></tr>`;
+  const chips = [['', '全部'], ['open', '招聘中'], ['paused', '暂停'], ['closed', '已关闭']]
+    .map(([v, l]) => `<button class="btn-sm ${posFilter.status === v ? 'btn' : 'btn-line'}" data-pst="${v}">${l}</button>`).join(' ');
+  view().innerHTML = `
+    <div class="toolbar">
+      <input class="grow" id="posQ" placeholder="搜索岗位名称 / 部门项目" value="${esc(posFilter.q)}">
+      <button class="btn" id="addPos">+ 新增岗位</button>
+    </div>
+    <div class="toolbar" style="margin-top:-6px">${chips}
+      <span class="muted" style="font-size:12px;margin-left:8px">点击任一行查看岗位详情与已关联的候选人</span>
+    </div>
+    <table><thead><tr>
+      <th>岗位名称</th><th>类别</th><th>需求人数</th><th>关联JD</th>
+      <th>开始招聘</th><th>Offer时间</th><th>到岗时间</th>
+      <th>候选人</th><th>状态</th><th>负责人</th><th>操作</th>
+    </tr></thead><tbody>${rows}</tbody></table>`;
+  $('#posQ').oninput = e => { posFilter.q = e.target.value; clearTimeout(e.target._t); e.target._t = setTimeout(renderPositions, 300); };
+  $('#addPos').onclick = () => openPositionForm(null);
+  view().querySelectorAll('[data-pst]').forEach(b => b.onclick = () => { posFilter.status = b.dataset.pst; renderPositions(); });
+  view().querySelectorAll('[data-pos]').forEach(tr => tr.onclick = (ev) => {
+    if (ev.target.closest('[data-pact]')) return;
+    openPositionDetail(tr.dataset.pos);
+  });
+  view().querySelectorAll('[data-pact]').forEach(b => b.onclick = async (ev) => {
+    ev.stopPropagation();
+    const p = positions.find(x => String(x.id) === b.dataset.id);
+    if (b.dataset.pact === 'edit') return openPositionForm(p);
+    if (!confirm(`确认删除岗位「${p.name}」？已关联的候选人会自动解除关联（候选人本身不会被删）。`)) return;
+    try { await api('DELETE', '/api/positions/' + p.id); toast('已删除'); renderPositions(); }
+    catch (e) { toast(e.message); }
+  });
+}
+
+// 新增 / 编辑岗位
+async function openPositionForm(p) {
+  const isEdit = !!(p && p.id);
+  const v = (k) => isEdit ? esc(p[k] || '') : '';
+  openModal(isEdit ? '编辑岗位' : '新增在招岗位', `
+    <div class="row2">
+      <div class="field"><label>岗位名称 *</label><input name="name" value="${v('name')}" placeholder="如：招商品类高级经理"></div>
+      <div class="field"><label>类别</label><select name="category">
+        <option value="总部" ${isEdit && p.category === '总部' ? 'selected' : ''}>总部</option>
+        <option value="项目" ${isEdit && p.category === '项目' ? 'selected' : ''}>项目</option>
+      </select></div>
+    </div>
+    <div class="row2">
+      <div class="field"><label>所属部门 / 项目</label><input name="dept" value="${v('dept')}" placeholder="如：招商部 / 北京华联常营店"></div>
+      <div class="field"><label>需求人数</label><input name="headcount" type="number" min="1" value="${isEdit ? (p.headcount || 1) : 1}"></div>
+    </div>
+    <div class="row2">
+      <div class="field"><label>关联 JD（岗位说明书）</label><select name="jd_id" id="posJdSel"><option value="">未关联</option></select></div>
+      <div class="field"><label>招聘负责人</label>${ownerSelect(isEdit ? p.owner_id : me.id)}</div>
+    </div>
+    <div class="section-title">时间节点</div>
+    <div class="row3">
+      <div class="field"><label>开始招聘时间</label><input name="start_date" type="date" value="${v('start_date')}"></div>
+      <div class="field"><label>Offer 时间</label><input name="offer_date" type="date" value="${v('offer_date')}"></div>
+      <div class="field"><label>到岗时间</label><input name="onboard_date" type="date" value="${v('onboard_date')}"></div>
+    </div>
+    <div class="row2">
+      <div class="field"><label>岗位状态</label><select name="status">
+        ${Object.entries(POS_STATUS_LABEL).map(([k, l]) => `<option value="${k}" ${isEdit && p.status === k ? 'selected' : ''}>${l}</option>`).join('')}
+      </select></div>
+      <div class="field"><label>&nbsp;</label><span class="muted" style="font-size:12px;align-self:center">Offer / 到岗时间可先留空，进展中再回来补</span></div>
+    </div>
+    <div class="field"><label>备注</label><textarea name="remark" placeholder="薪资区间、用人部门要求、紧急程度等">${v('remark')}</textarea></div>
+    <div class="modal-actions"><button class="btn-ghost" onclick="closeModal()">取消</button><button class="btn" id="savePos">保存</button></div>
+  `);
+  // 关联 JD 下拉（按总部/项目分组）
+  try {
+    const { jds } = await api('GET', '/api/jds');
+    const sel = $('#posJdSel');
+    if (sel) {
+      const opt = (j) => `<option value="${j.id}" ${isEdit && p.jd_id === j.id ? 'selected' : ''}>${esc(j.title)}</option>`;
+      const hq = jds.filter(j => j.category === '总部'), pj = jds.filter(j => j.category === '项目');
+      sel.innerHTML = '<option value="">未关联</option>'
+        + (hq.length ? `<optgroup label="总部">${hq.map(opt).join('')}</optgroup>` : '')
+        + (pj.length ? `<optgroup label="项目">${pj.map(opt).join('')}</optgroup>` : '');
+    }
+  } catch (e) { /* ignore */ }
+  $('#savePos').onclick = async () => {
+    const body = {};
+    $('#modal').querySelectorAll('input,select,textarea').forEach(el => { if (el.name) body[el.name] = el.value.trim(); });
+    if (!body.name) { toast('请填写岗位名称'); return; }
+    try {
+      if (isEdit) await api('PUT', '/api/positions/' + p.id, body);
+      else await api('POST', '/api/positions', body);
+      closeModal(); toast('已保存'); renderPositions();
+    } catch (e) { toast(e.message); }
+  };
+}
+
+// 岗位详情：时间节点 + 关联 JD + 已关联候选人 + 可继续关联
+async function openPositionDetail(id) {
+  let d;
+  try { d = await api('GET', '/api/positions/' + id); } catch (e) { return toast(e.message); }
+  const p = d.position;
+  const cands = d.candidates || [];
+  const node = (label, val) => `<div class="tl-node"><div class="tl-l">${label}</div><div class="tl-v">${val ? esc(val) : '<span class="muted">未设置</span>'}</div></div>`;
+  const rows = cands.length ? cands.map(c => `
+    <tr><td><b>${esc(c.name)}</b></td><td>${esc(c.phone || '—')}</td>
+    <td><span class="stage-pill">${STAGES[c.stage] || '—'}</span></td>
+    <td><span class="badge ${{ active: 'b-active', in_pool: 'b-pool', hired: 'b-hired', rejected: 'b-rejected' }[c.status] || ''}">${STATUS_LABEL[c.status] || ''}</span></td>
+    <td>${esc(c.owner_name || '—')}</td>
+    <td><button class="btn-sm btn-line" data-unbind="${c.id}">解除关联</button></td></tr>`).join('')
+    : '<tr><td colspan="6" class="empty">还没有关联候选人，点下方「关联候选人」从招聘流程里选</td></tr>';
+  openModal(esc(p.name), `
+    <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin:-6px 0 12px">
+      <span class="badge ${POS_STATUS_CLS[p.status] || ''}">${POS_STATUS_LABEL[p.status] || p.status}</span>
+      <span class="tag">${esc(p.category || '—')}</span>
+      ${p.dept ? `<span class="tag">${esc(p.dept)}</span>` : ''}
+      <span class="muted" style="font-size:12px">需求 ${p.headcount || 1} 人 · 负责人 ${esc(p.owner_name || '未分配')}</span>
+    </div>
+    <div class="tl">${node('开始招聘', p.start_date)}${node('Offer 时间', p.offer_date)}${node('到岗时间', p.onboard_date)}</div>
+    <div class="section-title">关联 JD</div>
+    <div>${p.jd_title ? `<a href="javascript:void(0)" id="posJdLink" style="color:#2563eb">📋 ${esc(p.jd_title)}（点击查看说明书全文）</a>` : '<span class="muted">未关联 JD，可在「编辑」里选择</span>'}</div>
+    ${p.remark ? `<div class="section-title">备注</div><div style="white-space:pre-wrap;line-height:1.6">${esc(p.remark)}</div>` : ''}
+    <div class="section-title">该岗位的候选人（${cands.length}）</div>
+    <table><thead><tr><th>姓名</th><th>手机号</th><th>阶段</th><th>状态</th><th>负责人</th><th>操作</th></tr></thead><tbody>${rows}</tbody></table>
+    <div class="modal-actions">
+      <button class="btn-ghost" onclick="closeModal()">关闭</button>
+      <button class="btn-line btn-sm" id="posLink">关联候选人</button>
+      <button class="btn" id="posEdit">编辑岗位</button>
+    </div>`, true);
+  if ($('#posJdLink')) $('#posJdLink').onclick = () => openJdDetail(p.jd_id);
+  $('#posEdit').onclick = () => openPositionForm(p);
+  $('#posLink').onclick = () => openPositionLinkForm(p);
+  $('#modal').querySelectorAll('[data-unbind]').forEach(b => b.onclick = async () => {
+    try {
+      await api('POST', `/api/positions/${p.id}/candidates`, { candidate_ids: [Number(b.dataset.unbind)], detach: true });
+      toast('已解除关联'); openPositionDetail(p.id);
+    } catch (e) { toast(e.message); }
+  });
+}
+
+// 从招聘流程中勾选候选人关联到岗位
+async function openPositionLinkForm(p) {
+  let list = [];
+  try { list = (await api('GET', '/api/candidates?status=active')).candidates || []; } catch (e) { return toast(e.message); }
+  const items = list.length ? list.map(c => `
+    <label class="check-item">
+      <input type="checkbox" value="${c.id}" ${String(c.position_id) === String(p.id) ? 'checked disabled' : ''}>
+      <span>${esc(c.name)} <span class="muted" style="font-size:12px">${STAGES[c.stage] || ''}${c.position_name ? ' · 现属：' + esc(c.position_name) : ''}</span></span>
+    </label>`).join('') : '<div class="muted">招聘中暂无候选人</div>';
+  openModal(`关联候选人 · ${esc(p.name)}`, `
+    <p class="muted">勾选要归入「${esc(p.name)}」的候选人。已在本岗位的会显示为灰色勾选。一个候选人同一时间只归属一个岗位。</p>
+    <div style="max-height:340px;overflow:auto;margin-top:10px">${items}</div>
+    <div class="modal-actions"><button class="btn-ghost" onclick="closeModal()">取消</button><button class="btn" id="linkGo">确认关联</button></div>`);
+  $('#linkGo').onclick = async () => {
+    const ids = Array.from($('#modal').querySelectorAll('input[type=checkbox]:checked:not(:disabled)')).map(x => Number(x.value));
+    if (!ids.length) { toast('请先勾选候选人'); return; }
+    try { await api('POST', `/api/positions/${p.id}/candidates`, { candidate_ids: ids }); toast(`已关联 ${ids.length} 人`); openPositionDetail(p.id); }
+    catch (e) { toast(e.message); }
   };
 }
 
@@ -650,8 +897,8 @@ function exportCsv(list, name) {
 }
 
 // ============ Modal ============
-function openModal(title, html) {
-  $('#modal').innerHTML = `<div class="modal"><h3>${title}</h3>${html}</div>`;
+function openModal(title, html, wide) {
+  $('#modal').innerHTML = `<div class="modal${wide ? ' wide' : ''}"><h3>${title}</h3>${html}</div>`;
   $('#modal').classList.remove('hidden');
 }
 function closeModal() { $('#modal').classList.add('hidden'); $('#modal').innerHTML = ''; }
