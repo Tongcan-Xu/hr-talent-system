@@ -1,7 +1,8 @@
 'use strict';
 // ============ 基础 ============
 const STAGES = ['简历筛选', '初试', '复试', '终面', 'Offer', '入职'];
-const SOURCES = ['内推', '猎头', '官网', '猎聘', '智联', 'Boss', '校园招聘', '其他'];
+// 招聘渠道：以三大主流招聘平台（猎聘/智联/Boss）为主，其余为常用补充
+const SOURCES = ['猎聘', '智联', 'Boss', '内推', '猎头', '官网', '校园招聘', '其他'];
 const EDU = ['大专', '本科', '硕士', '博士', '其他'];
 const STATUS_LABEL = { active: '招聘中', in_pool: '人才库', hired: '已入职', rejected: '已淘汰' };
 const POS_STATUS_LABEL = { open: '招聘中', paused: '暂停', closed: '已关闭' };
@@ -248,7 +249,10 @@ function openCandidateForm(c) {
     </div>
     <div class="row2">
       <div class="field"><label>应聘职位</label><input name="position" value="${v('position')}"></div>
-      <div class="field"><label>招聘来源</label><select name="source">${SOURCES.map(s => `<option ${c && c.source === s ? 'selected' : ''}>${s}</option>`).join('')}</select></div>
+      <div class="field"><label>招聘来源</label><select name="source">
+        ${(c && c.source && !SOURCES.includes(c.source)) ? `<option value="${esc(c.source)}" selected>${esc(c.source)}（历史）</option>` : ''}
+        ${SOURCES.map(s => `<option value="${esc(s)}" ${c && c.source === s ? 'selected' : ''}>${esc(s)}</option>`).join('')}
+      </select></div>
     </div>
     <div class="row2">
       <div class="field"><label>在招岗位</label><select name="position_id" id="posSel"><option value="">未关联</option></select></div>
