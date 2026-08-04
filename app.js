@@ -141,6 +141,11 @@ async function renderDashboard() {
       <div class="stat"><div class="num">${stats.hired}</div><div class="lbl">已入职</div><div class="bar" style="background:var(--green)"></div></div>
       <div class="stat"><div class="num">${stats.hireRate}%</div><div class="lbl">录用率 · 人才库 ${stats.pool}</div><div class="bar" style="background:var(--amber)"></div></div>
     </div>
+    <div class="grid cards3" style="margin-top:16px">
+      <div class="stat clickable" id="cardHiring"><div class="num">${stats.openHeadcount || 0}</div><div class="lbl">在招人数</div><div class="bar" style="background:var(--purple)"></div></div>
+      <div class="stat"><div class="num">${stats.offerThisMonth || 0}</div><div class="lbl">本月 Offer 人数</div><div class="bar" style="background:var(--primary)"></div></div>
+      <div class="stat"><div class="num">${stats.onboardThisMonth || 0}</div><div class="lbl">本月到岗人数</div><div class="bar" style="background:var(--green)"></div></div>
+    </div>
     <div class="grid cards2" style="margin-top:16px">
       <div class="panel"><div class="section-title">招聘漏斗（各环节人数）</div>${funnel}
         <div class="muted" style="font-size:12px;margin-top:8px">本月新增候选人：<b>${stats.newThisMonth}</b> 人 · 已淘汰：${stats.rejected} 人</div>
@@ -149,6 +154,7 @@ async function renderDashboard() {
     </div>
     <div class="panel" style="margin-top:16px"><div class="section-title">招聘渠道分布</div>${source}</div>`;
   if ($('#cardPos')) $('#cardPos').onclick = () => { location.hash = '#/positions'; };
+  if ($('#cardHiring')) $('#cardHiring').onclick = () => { location.hash = '#/positions'; };
 }
 
 // ============ 招聘流程 ============

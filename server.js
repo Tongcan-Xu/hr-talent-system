@@ -1008,17 +1008,22 @@ const server = http.createServer(async (req, res) => {
       const newThisMonth = all.filter(c => c.created_at >= startMonth).length;
       const totalDecided = hired.length + rejected.length;
       const hireRate = totalDecided ? Math.round((hired.length / totalDecided) * 100) : 0;
-      let openPositions = 0, openHeadcount = 0;
+      let openPositions = 0, openHeadcount = 0, offerThisMonth = 0, onboardThisMonth = 0;
       try {
-        const ps = await db.prepare(`SELECT status, headcount FROM positions`).all();
+        const ps = await db.prepare(`SELECT status, headcount, offer_date, onboard_date FROM positions`).all();
         const opens = ps.filter(p => p.status === 'open');
         openPositions = opens.length;
         openHeadcount = opens.reduce((s, p) => s + (Number(p.headcount) || 0), 0);
+        const ym = new Date().getFullYear() + '-' + String(new Date().getMonth() + 1).padStart(2, '0');
+        const sumHc = (arr) => arr.reduce((s, p) => s + (Number(p.headcount) || 0), 0);
+        offerThisMonth = sumHc(ps.filter(p => p.offer_date && String(p.offer_date).slice(0, 7) === ym));
+        onboardThisMonth = sumHc(ps.filter(p => p.onboard_date && String(p.onboard_date).slice(0, 7) === ym));
       } catch { /* 老库尚未建表时忽略 */ }
       return sendJSON(res, 200, {
         stats: {
           active: active.length, pool: pool.length, hired: hired.length, rejected: rejected.length,
-          total: all.length, newThisMonth, hireRate, funnel, sourceArr, openPositions, openHeadcount
+          total: all.length, newThisMonth, hireRate, funnel, sourceArr, openPositions, openHeadcount,
+          offerThisMonth, onboardThisMonth
         }
       });
     }
