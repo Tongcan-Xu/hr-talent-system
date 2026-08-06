@@ -75,10 +75,24 @@ function regForm() {
   $('#go').onclick = doRegister;
 }
 async function doLogin() {
+  const btn = document.getElementById('go');
+  const oldText = btn ? btn.textContent : '登录';
+  if (btn) { btn.disabled = true; btn.textContent = '登录中…'; }
   try {
-    const d = await api('POST', '/api/auth/login', { username: $('#u').value, password: $('#p').value });
-    afterAuth(d);
-  } catch (e) { toast(e.message); }
+    const resp = await fetch('/api/auth/login', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ username: $('#u').value, password: $('#p').value })
+    });
+    const d = await resp.json().catch(() => ({}));
+    if (resp.ok && d.token) { afterAuth(d); return; }
+    if (resp.status === 401) toast(d.error || '用户名或密码错误');
+    else toast('数据库连接较慢或暂时不可用，请稍后重试');
+  } catch (e) {
+    toast('网络连接失败，请检查网络后重试');
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = oldText; }
+  }
 }
 async function doRegister() {
   try {

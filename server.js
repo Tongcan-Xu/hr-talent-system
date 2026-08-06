@@ -29,7 +29,18 @@ let pgPool = null;
 if (usePg) {
   const { Pool } = require('pg');
   const ssl = /sslmode=disable/i.test(DATABASE_URL) ? false : { rejectUnauthorized: false };
-  pgPool = new Pool({ connectionString: DATABASE_URL, ssl });
+  pgPool = new Pool({
+    connectionString: DATABASE_URL,
+    ssl,
+    max: 5,
+    idleTimeoutMillis: 30000,
+    connectionTimeoutMillis: 15000,
+    keepAlive: true,
+    keepAliveInitialDelayMillis: 10000,
+  });
+  // 心跳保活：每 4 分钟探活一次，防止 Neon 免费库因空闲自动暂停导致连接冷启动慢/超时
+  const hb = setInterval(() => { pgPool.query('SELECT 1').catch(() => {}); }, 4 * 60 * 1000);
+  if (hb && hb.unref) hb.unref();
 } else {
   const { DatabaseSync } = require('node:sqlite');
   sqliteDb = new DatabaseSync(path.join(DATA_DIR, 'hr.db'));
@@ -275,6 +286,24 @@ function toPgSql(sql) {
   let i = 0;
   return sql.replace(/\?/g, () => '$' + (++i));
 }
+// 跨境数据库（美国 Neon）连接慢 / 偶发超时时的重试兜底：
+// 首次查询若因连接冷启动或网络抖动失败，自动再试一次，通常第二次就成功（配合上面的心跳保活）。
+async function pgQueryWithRetry(text, params, attempt = 1) {
+  const MAX = 2;
+  try {
+    return await pgPool.query(text, params);
+  } catch (e) {
+    const msg = (e && e.message) || '';
+    const retryable = /timeout|timedout|etimedout|econnreset|enotfound|terminating|connection|57p01|08006|08001|08004|53300|socket/i.test(msg) || (e && e.code);
+    if (attempt < MAX && retryable) {
+      console.warn(`[pg重试] 第${attempt}次查询失败，${1500}ms 后重试:`, msg);
+      await new Promise((r) => setTimeout(r, 1500));
+      return pgQueryWithRetry(text, params, attempt + 1);
+    }
+    throw e;
+  }
+}
+
 function prepare(sql) {
   if (!usePg) {
     const stmt = sqliteDb.prepare(sql);
@@ -289,10 +318,10 @@ function prepare(sql) {
   const needReturning = !!m && ID_TABLES.has(table);
   const pgSql = needReturning ? toPgSql(sql) + ' RETURNING id' : toPgSql(sql);
   return {
-    async get(...p) { const r = await pgPool.query(pgSql, p); return r.rows[0] || null; },
-    async all(...p) { const r = await pgPool.query(pgSql, p); return r.rows; },
+    async get(...p) { const r = await pgQueryWithRetry(pgSql, p); return r.rows[0] || null; },
+    async all(...p) { const r = await pgQueryWithRetry(pgSql, p); return r.rows; },
     async run(...p) {
-      const r = await pgPool.query(pgSql, p);
+      const r = await pgQueryWithRetry(pgSql, p);
       const lastId = (needReturning && r.rows[0]) ? r.rows[0].id : undefined;
       return { lastInsertRowid: lastId, changes: r.rowCount };
     }
